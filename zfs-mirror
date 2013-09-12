@@ -88,7 +88,7 @@ while getopts "b:k:nvD" opt; do
             REALLY=0
         ;;
         v)
-            ((VERBOSE++))
+            : $((VERBOSE++))
         ;;
         D)
             ZFS_SEND_DEDUP="-D"
@@ -179,21 +179,21 @@ function have_lock {
 
 function release_lock {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
     logv "Releasing lock $1"
     if have_lock $1; then
         rm -f $1
     fi
-    ((DEPTH--))
+    : $((DEPTH--))
     return 0
 }
 
 function cleanup {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
     release_lock $GLOBAL_LOCKFILE
     release_lock $DEST_LOCKFILE
-    ((DEPTH--))
+    : $((DEPTH--))
     return $1
 }
 
@@ -257,7 +257,7 @@ function get_destinations {
 
 function zfs_send_incr {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
 #$fs $DEST $old_snap $new_snap
     local host=$(echo $2 | cut -d: -f1)
     local pool=$(echo $2 | cut -d: -f2)
@@ -268,13 +268,13 @@ function zfs_send_incr {
         local zfs="$BWLIMIT $SSH $host zfs"
     fi
     do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $zfs receive $ZFS_VERBOSE -Fud $pool"
-    ((DEPTH--))
+    : $((DEPTH--))
     return 0
 }
 
 function zfs_send_new {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
 #$fs $DEST $new_snap
     local host=$(echo $2 | cut -d: -f1)
     local pool=$(echo $2 | cut -d: -f2)
@@ -285,13 +285,13 @@ function zfs_send_new {
         local zfs="$BWLIMIT $SSH $host zfs"
     fi
     do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $zfs receive -Fud $pool"
-    ((DEPTH--))
+    : $((DEPTH--))
     return 0
 }
 
 function expire_src_snaps {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
     # NB: if a dest has been set for a dataset but has not completed even the
     # initial send, no snapshots will be destroyed as there's no way to know for
     # certain if a given snapshot is currently being sent by another instance of
@@ -319,13 +319,13 @@ function expire_src_snaps {
             fi
         done
     done
-    ((DEPTH--))
+    : $((DEPTH--))
     return 0
 }
 
 function expire_dest_snaps {
     trace $FUNCNAME $@
-    ((DEPTH++))
+    : $((DEPTH++))
     logv "Expiring old snapshots on $1"
     if [[ $(echo -e "foo\nbar"|$HEAD -n -1 2>/dev/null) != "foo" ]]; then
         warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
@@ -359,7 +359,7 @@ function expire_dest_snaps {
     elif [[ $(echo $cap | cut -d% -f1) -gt $threshold ]]; then
         warn "Destination capacity over $threshold% ($cap) after snapshot expiration"
     fi
-    ((DEPTH--))
+    : $((DEPTH--))
     return 0
 }
 
@@ -410,7 +410,7 @@ trap 'cleanup $?' INT TERM EXIT
 WAITTIME=0
 while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
     log "Couldn't get global lock (after $WAITTIME seconds); waiting 10 seconds"
-    ((WAITTIME += 10))
+    : $((WAITTIME += 10))
     sleep 10
 done
 
