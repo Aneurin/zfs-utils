@@ -197,6 +197,13 @@ function cleanup {
     return $1
 }
 
+function zfs_supports_multiple_snapshots {
+    trace $FUNCNAME $@
+    # Does the usage note for zfs snapshot include '...' at the end.
+    $ZFS snapshot 2>&1 | $GREP -q -e '\.\.\.$'
+    return $?
+}
+
 function get_source_filesystems {
     trace $FUNCNAME $@
     local dest=${1:-""}
@@ -434,7 +441,14 @@ if get_lock $GLOBAL_LOCKFILE; then
         # Second task: create new snapshots
         if [[ $source_filesystems != "" ]]; then
             do_conditionally "$ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
-            do_conditionally "$ZFS snapshot $new_snapshots"
+            if zfs_supports_multiple_snapshots; then
+                do_conditionally "$ZFS snapshot $new_snapshots"
+            else
+                warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
+                for snap in $new_snapshots; do
+                    do_conditionally "$ZFS snapshot $snap"
+                done
+            fi
         else
             error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
         fi
