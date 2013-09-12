@@ -1,0 +1,475 @@
+#!/bin/bash
+
+# Configuration:
+#
+# For each dataset to synchronise, set the property "zfs-mirror:dest" locally on
+# that dataset, to values of the form "hostname:pool[,hostname:pool...]"
+#
+# The script will set the property "zfs-mirror:latest" on the root dataset; this
+# shouldn't be manually changed.
+
+set -o nounset
+set -e
+
+# Ugly perhaps, but this is the simplest way not to have to worry about $PATH on
+# different systems
+PATH=/usr/gnu/bin:/usr/local/bin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH
+
+ZFS=zfs
+ZPOOL=zpool
+GREP=grep
+HEAD=head
+SSH=ssh
+TRICKLE=trickle
+
+VERBOSE=0
+REALLY=1
+BWLIMIT=""
+KEEP=10
+ZFS_SEND_DEDUP=""
+
+PROPERTY_PREFIX=zfs-mirror
+SNAPSHOT_PREFIX=zfs-mirror
+
+ERR_SRC_POOL_MISSING=64   # Source pool not given or not found
+ERR_DEST_POOL_MISSING=65  # Destination pool not found
+ERR_NO_SOURCES_DEFINED=66 # No source filesystems are configured for the given destination
+ERR_SRC_SNAP_MISSING=67   # The source filesystem doesn't have the counterpart to the destination's latest snapshot
+ERR_COULDNT_SEND=68       # There was a problem synchronising the snapshot from the source to the destination
+
+if [[ -t 2 ]]; then
+    # stderr is a terminal
+    COL_GREEN="\e[32m"
+    COL_GREY="\e[1;30m"
+    COL_YELLOW="\e[1;33m"
+    COL_RED="\e[31m"
+    COL_END="\e[0m"
+else
+    COL_GREEN=""
+    COL_GREY=""
+    COL_YELLOW=""
+    COL_RED=""
+    COL_END=""
+fi
+
+function warn {
+    echo -e "[$COL_YELLOW""Warn: $COL_END]" $@ >&2
+}
+
+function error {
+    echo -e "[$COL_RED""Error:$COL_END]" $1 >&2
+    local status=${2:-1}
+    exit $status
+}
+
+for command in $ZFS $ZPOOL $GREP; do
+    if [[ ! -x $(which $command) ]]; then
+        error "'$command' not found"
+    fi
+done
+
+while getopts "b:k:nvD" opt; do
+    case $opt in
+        b)
+            if [[ -x $(which $TRICKLE) ]]; then
+                BWLIMIT="$TRICKLE -s -u $OPTARG"
+            else
+                error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
+            fi
+        ;;
+        k)
+            if [[ $OPTARG -ge 1 ]]; then
+                KEEP=$OPTARG
+            else
+                KEEP=1
+            fi
+        ;;
+        n)
+            REALLY=0
+        ;;
+        v)
+            ((VERBOSE++))
+        ;;
+        D)
+            ZFS_SEND_DEDUP="-D"
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [[ $# -eq 0 ]]; then
+    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
+fi
+SRC=$1
+DEST=${2:-'localhost:backup'}
+
+ZFS_VERBOSE=""
+if [[ $VERBOSE -ge 4 ]]; then
+    ZFS_VERBOSE="-v"
+fi
+
+if [[ $(id -u) -eq 0 ]]; then
+    LOCK_PATH=/var/run
+else
+    LOCK_PATH=$HOME
+fi
+GLOBAL_LOCKFILE=$LOCK_PATH/zfs-mirror.lock
+DEST_LOCKFILE=$LOCK_PATH/zfs-mirror-$DEST.lock
+
+if [[ $VERBOSE -ge 3 ]]; then
+    if [[ -e /usr/gnu/bin/date ]]; then
+        DATE="/usr/gnu/bin/date"
+    else
+        DATE="date"
+    fi
+    if ! which $DATE > /dev/null 2>&1; then
+        warn "'date' not found; trace output will lack timestamps"
+        DATE=""
+    elif ! $DATE --rfc-3339=ns > /dev/null 2>&1; then
+        warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
+        DATE="$DATE +%Y/%m/%d/%H.%M.%S"
+    else
+        DATE="$DATE --rfc-3339=ns"
+    fi
+fi
+
+DEPTH=0
+function trace {
+    if [[ $VERBOSE -ge 3 ]]; then
+        printf "[$COL_GREY""Trace:$COL_END] $COL_GREY""[$($DATE)]$COL_END%*s" $((DEPTH * 4)) " " >&2
+        printf "%s\n" "$*" >&2
+    fi
+}
+
+function log {
+    if [[ $VERBOSE -ge 1 ]]; then
+        echo -e "[$COL_GREEN""Info: $COL_END]" $@ >&2
+    fi
+}
+
+function logv {
+    if [[ $VERBOSE -ge 2 ]]; then
+        echo "[Debug:]" $@ >&2
+    fi
+}
+
+function do_conditionally {
+    trace $FUNCNAME $@
+
+    if [[ $REALLY == 1 ]]; then
+        log "Running: $@"
+        eval $@
+    else
+        log "Would run: $@"
+    fi
+}
+
+function get_lock {
+    trace $FUNCNAME $@
+    logv "Trying to take lock: $1"
+    ( set -o noclobber; echo "$$" > "$1") 2> /dev/null
+    return $?
+}
+
+function have_lock {
+    trace $FUNCNAME $@
+    [ -f $1 ] && [ $(cat $1) = $$ ]
+    return $?
+}
+
+function release_lock {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+    logv "Releasing lock $1"
+    if have_lock $1; then
+        rm -f $1
+    fi
+    ((DEPTH--))
+    return 0
+}
+
+function cleanup {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+    release_lock $GLOBAL_LOCKFILE
+    release_lock $DEST_LOCKFILE
+    ((DEPTH--))
+    return $1
+}
+
+function get_source_filesystems {
+    trace $FUNCNAME $@
+    local dest=${1:-""}
+    for fs in $($ZFS list -rH -o name $SRC); do
+        if $ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q ""$dest; then
+            logv "$fs configured as sync source"
+            echo $fs
+        fi
+    done
+}
+
+function dataset_exists {
+    trace $FUNCNAME $@
+    local host=$(echo $1 | cut -d: -f1)
+    local dataset=$(echo $1 | cut -d: -f2)
+    logv "Checking $dataset exists"
+    if [[ $host == "localhost" ]]; then
+        local zfs=$ZFS
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$SSH $host zfs"
+    fi
+    $zfs list $dataset >/dev/null 2>&1
+    return $?
+}
+
+function latest_snapshot {
+    trace $FUNCNAME $@
+    local host=$(echo $1 | cut -d: -f1)
+    local dataset=$(echo $1 | cut -d: -f2)
+    if [[ $host == "localhost" ]]; then
+        local zfs=$ZFS
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$SSH $host zfs"
+    fi
+    local latest=$($zfs list -H -d 1 -r -o name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | tail -n 1 | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
+    echo -n ${latest:-0}
+    logv "Latest snapshot of $1: ${latest:-0}"
+}
+
+function get_destinations {
+    trace $FUNCNAME $@
+    local OLDIFS=$IFS
+    IFS=','
+    for dest in $($ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1); do
+        echo -n " $dest"
+    done
+    IFS=$OLDIFS
+}
+
+function zfs_send_incr {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+#$fs $DEST $old_snap $new_snap
+    local host=$(echo $2 | cut -d: -f1)
+    local pool=$(echo $2 | cut -d: -f2)
+    if [[ $host == "localhost" ]]; then
+        local zfs=$ZFS
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$BWLIMIT $SSH $host zfs"
+    fi
+    do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $zfs receive $ZFS_VERBOSE -Fud $pool"
+    ((DEPTH--))
+    return 0
+}
+
+function zfs_send_new {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+#$fs $DEST $new_snap
+    local host=$(echo $2 | cut -d: -f1)
+    local pool=$(echo $2 | cut -d: -f2)
+    if [[ $host == "localhost" ]]; then
+        local zfs=$ZFS
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$BWLIMIT $SSH $host zfs"
+    fi
+    do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $zfs receive -Fud $pool"
+    ((DEPTH--))
+    return 0
+}
+
+function expire_src_snaps {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+    # NB: if a dest has been set for a dataset but has not completed even the
+    # initial send, no snapshots will be destroyed as there's no way to know for
+    # certain if a given snapshot is currently being sent by another instance of
+    # the script.
+    logv "Expiring old snapshots on $SRC"
+    local latest_snap_num=$($ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+    for fs in $@; do
+        local latest_needed_snap_num=$latest_snap_num
+        for dest in $(get_destinations $fs); do
+            local destfs=$(echo -n "$fs" | sed -e "s/^$SRC/$dest/")
+            local latest_snap_on_dest=$(latest_snapshot $destfs)
+            if [[ $latest_snap_on_dest == "0" ]]; then
+                warn "Can't find any snapshots of $fs on $dest; either this dataset has never been synchronised, or there was a connection problem. Not expiring any snapshots."
+            fi
+            if [[ $latest_snap_on_dest -lt $latest_needed_snap_num ]]; then
+                latest_needed_snap_num=$latest_snap_on_dest
+            fi
+        done
+        for snap_num in $($ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+            if [[ $snap_num -lt $latest_needed_snap_num ]]; then
+                logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+                do_conditionally "$ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+            else
+                logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+            fi
+        done
+    done
+    ((DEPTH--))
+    return 0
+}
+
+function expire_dest_snaps {
+    trace $FUNCNAME $@
+    ((DEPTH++))
+    logv "Expiring old snapshots on $1"
+    if [[ $(echo -e "foo\nbar"|$HEAD -n -1 2>/dev/null) != "foo" ]]; then
+        warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
+        return
+    fi
+    local host=$(echo $1 | cut -d: -f1)
+    local pool=$(echo $1 | cut -d: -f2)
+    if [[ $host == "localhost" ]]; then
+        local zfs=$ZFS
+        local zpool=$ZPOOL
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$SSH $host zfs"
+        local zpool="$SSH $host zpool"
+    fi
+    shift
+    for srcfs in $@; do
+        destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$pool/")
+        logv "Expiring snapshots on $host:$destfs"
+        for snapshot in $($zfs list -H -d 1 -r -o name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
+            do_conditionally "$zfs destroy $ZFS_VERBOSE $snapshot"
+        done
+    done
+    local threshold=95
+    local cap=$($zpool list -H -o capacity $pool)
+    if [[ ! $? ]]; then
+        # Strictly this check isn't necessary, but the previous check for this
+        # pool's existence used 'zfs' rather than 'zpool', so this serves as a
+        # sanity check that 'zpool' is available.
+        warn "Couldn't find pool $DEST"
+    elif [[ $(echo $cap | cut -d% -f1) -gt $threshold ]]; then
+        warn "Destination capacity over $threshold% ($cap) after snapshot expiration"
+    fi
+    ((DEPTH--))
+    return 0
+}
+
+#function expire_src_snaps {
+#    # This might be better done entirely differently: determine the last
+#    # snapshot number for which a full set of replicas exist, and destroy any
+#    # older. IE:
+#    # Starting at the current snapshot number, for each configured source fs,
+#    # check if each configure dest has that snapshot, and decrement snapshot
+#    # numbers until that's the case, then destroy any older than that
+#    local all_source_filesystems=$(get_source_filesystems)
+#    for fs in $all_source_filesystems; do
+#        for snap_num in $($ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+#            local next_snap=$fs@"$SNAPSHOT_PREFIX"_$((snap_num + 1))
+#            local snapshot_needed="false"
+#            # If unneeded - source and all configured destinations have this snapshot's successor
+#            # This is currently too conservative - if the snapshot is so out of
+#            # date that the destination no longer has it, then we mark it as
+#            # still needed
+#            if dataset_exists localhost:$next_snap; then
+#                for dest in $(get_destinations $fs); do
+#                    local dest_next_snap=$(echo -n "$next_snap" | sed -e "s/^$SRC/$dest/")
+#                    if ! dataset_exists $dest_next_snap; then
+#                        snapshot_needed="true"
+#                        break
+#                    fi
+#                done
+#            else
+#                snapshot_needed="true"
+#            fi
+#            if [[ $snapshot_needed == "true" ]]; then
+#                logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+#            elif [[ $snapshot_needed == "false" ]]; then
+#                logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+#                do_conditionally "$ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+#            else
+#                echo "This can't happen: ($snapshot_needed)" >&2
+#                exit 1
+#            fi
+#        done
+#    done
+#}
+
+trap 'cleanup $?' INT TERM EXIT
+
+# It's worth waiting for the global lock to become available, as it's not
+# typically held for very long
+WAITTIME=0
+while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
+    log "Couldn't get global lock (after $WAITTIME seconds); waiting 10 seconds"
+    ((WAITTIME += 10))
+    sleep 10
+done
+
+if get_lock $GLOBAL_LOCKFILE; then
+    # It's probably not worth waiting for the per-destination lock, since it
+    # could be held for a long time (ie. there's a sync in progress)
+    if ! dataset_exists localhost:$SRC; then
+        error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+    fi
+    if get_lock $DEST_LOCKFILE; then
+        if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+            error "'$SSH' not found"
+        fi
+        if ! dataset_exists $DEST; then
+            error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
+        fi
+        old_snap=$($ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+        new_snap=$(($old_snap + 1))
+
+        # define what snapshots we want to create
+        logv "Source filesystems:"
+        source_filesystems=$(get_source_filesystems $DEST)
+        new_snapshots=""
+        for fs in $source_filesystems; do
+            new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
+        done
+
+        # Second task: create new snapshots
+        if [[ $source_filesystems != "" ]]; then
+            do_conditionally "$ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
+            do_conditionally "$ZFS snapshot $new_snapshots"
+        else
+            error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
+        fi
+        release_lock $GLOBAL_LOCKFILE
+
+        # Third task: sync new snapshots
+        for fs in $source_filesystems; do
+            old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
+            if [[ $old_snap -gt 0 ]]; then
+                if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
+                    error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $SRC" $ERR_SRC_SNAP_MISSING
+                fi
+                zfs_send_incr $fs $DEST $old_snap $new_snap
+            else
+                zfs_send_new $fs $DEST $new_snap
+            fi
+            if [[ ! $? ]]; then
+                error "Failed to send $fs@$new_snap to $DEST; giving up" $ERR_COULDNT_SEND
+            fi
+        done
+        # Fourth task: expire unneeded snapshots on source
+        if get_lock $GLOBAL_LOCKFILE; then
+            # It's not critical that this done now - for one thing, in all
+            # probability whatever process is holding the lock will do this
+            # snapshot expiration anyway - so don't bother waiting for it to
+            # become available.
+            expire_src_snaps $source_filesystems
+        fi
+        # Fifth task: expire unwanted snapshots on dest
+        expire_dest_snaps $DEST $source_filesystems
+    else
+        log "Couldn't get lock for $DEST; giving up"
+        exit 1
+    fi
+else
+    log "Couldn't get global zfs-mirror lock after $WAITTIME seconds; giving up"
+    exit 1
+fi
