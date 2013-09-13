@@ -27,6 +27,7 @@ REALLY=1
 BWLIMIT=""
 KEEP=10
 ZFS_SEND_DEDUP=""
+LOG_TO_TTY=false
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -39,6 +40,53 @@ ERR_COULDNT_SEND=68       # There was a problem synchronising the snapshot from 
 
 if [[ -t 2 ]]; then
     # stderr is a terminal
+    LOG_TO_TTY=true
+fi
+
+while getopts "b:k:nvDo:" opt; do
+    case $opt in
+        b)
+            if [[ -x $(which $TRICKLE) ]]; then
+                BWLIMIT="$TRICKLE -s -u $OPTARG"
+            else
+                TRICKLE_NOT_FOUND=true
+            fi
+            ;;
+        k)
+            if [[ $OPTARG -ge 1 ]]; then
+                KEEP=$OPTARG
+            else
+                KEEP=1
+            fi
+            ;;
+        n)
+            REALLY=0
+            ;;
+        v)
+            : $((VERBOSE++))
+            ;;
+        D)
+            ZFS_SEND_DEDUP="-D"
+            ;;
+        o)
+            case $OPTARG in
+                auto)
+                    ;;
+                syslog)
+                    LOG_TO_TTY=false
+                    ;;
+                tty)
+                    LOG_TO_TTY=true
+                    ;;
+                *)
+                    INVALID_OUTPUT_DEST=true
+            esac
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if $LOG_TO_TTY; then
     COL_GREEN="\e[32m"
     COL_GREY="\e[1;30m"
     COL_YELLOW="\e[1;33m"
@@ -52,50 +100,36 @@ else
     COL_END=""
 fi
 
+function out {
+    if $LOG_TO_TTY; then
+        cat >&2
+    else
+        logger -t zfs-mirror\[$$\]
+    fi
+}
+
 function warn {
-    echo -e "[$COL_YELLOW""Warn: $COL_END]" $@ >&2
+    echo -e "[$COL_YELLOW""Warn: $COL_END]" $@ | out
 }
 
 function error {
-    echo -e "[$COL_RED""Error:$COL_END]" $1 >&2
+    echo -e "[$COL_RED""Error:$COL_END]" $1 | out
     local status=${2:-1}
     exit $status
 }
 
+if [[ -v TRICKLE_NOT_FOUND ]]; then
+    error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
+fi
+
+if [[ -v INVALID_OUTPUT_DEST ]]; then
+    warn "Argument to -o must be 'auto', 'syslog', or 'tty'. Using auto."
+fi
 for command in $ZFS $ZPOOL $GREP; do
     if [[ ! -x $(which $command) ]]; then
         error "'$command' not found"
     fi
 done
-
-while getopts "b:k:nvD" opt; do
-    case $opt in
-        b)
-            if [[ -x $(which $TRICKLE) ]]; then
-                BWLIMIT="$TRICKLE -s -u $OPTARG"
-            else
-                error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
-            fi
-        ;;
-        k)
-            if [[ $OPTARG -ge 1 ]]; then
-                KEEP=$OPTARG
-            else
-                KEEP=1
-            fi
-        ;;
-        n)
-            REALLY=0
-        ;;
-        v)
-            : $((VERBOSE++))
-        ;;
-        D)
-            ZFS_SEND_DEDUP="-D"
-        ;;
-    esac
-done
-shift $((OPTIND - 1))
 
 if [[ $# -eq 0 ]]; then
     error "You must specify a source pool" $ERR_SRC_POOL_MISSING
@@ -136,20 +170,19 @@ fi
 DEPTH=0
 function trace {
     if [[ $VERBOSE -ge 3 ]]; then
-        printf "[$COL_GREY""Trace:$COL_END] $COL_GREY""[$($DATE)]$COL_END%*s" $((DEPTH * 4)) " " >&2
-        printf "%s\n" "$*" >&2
+        printf "[$COL_GREY""Trace:$COL_END] $COL_GREY""[$($DATE)]$COL_END%*s%s\n" $((DEPTH * 4)) " " "$*" | out
     fi
 }
 
 function log {
     if [[ $VERBOSE -ge 1 ]]; then
-        echo -e "[$COL_GREEN""Info: $COL_END]" $@ >&2
+        echo -e "[$COL_GREEN""Info: $COL_END]" $@ | out
     fi
 }
 
 function logv {
     if [[ $VERBOSE -ge 2 ]]; then
-        echo "[Debug:]" $@ >&2
+        echo "[Debug:]" $@ | out
     fi
 }
 
