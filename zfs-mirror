@@ -118,11 +118,11 @@ function error {
     exit $status
 }
 
-if [[ -v TRICKLE_NOT_FOUND ]]; then
+if [[ -n ${TRICKLE_NOT_FOUND+x} ]]; then
     error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
 fi
 
-if [[ -v INVALID_OUTPUT_DEST ]]; then
+if [[ -n ${INVALID_OUTPUT_DEST+x} ]]; then
     warn "Argument to -o must be 'auto', 'syslog', or 'tty'. Using auto."
 fi
 for command in $ZFS $ZPOOL $GREP; do
