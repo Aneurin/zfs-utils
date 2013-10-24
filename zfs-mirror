@@ -351,6 +351,7 @@ function zfs_send_new {
         local zfs="$BWLIMIT $SSH $host zfs"
     fi
     do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $zfs receive -Fud $pool"
+    do_conditionally "$zfs set readonly=on $1"
     : $((DEPTH--))
     return 0
 }
