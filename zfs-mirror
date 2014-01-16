@@ -25,7 +25,8 @@ TRICKLE=trickle
 VERBOSE=0
 REALLY=1
 BWLIMIT=""
-KEEP=10
+KEEP_DEST=10
+KEEP_SRC=2
 ZFS_SEND_DEDUP=""
 LOG_TO_STDERR=false
 COLOUR="auto"
@@ -57,10 +58,11 @@ while getopts "b:k:nvDo:" opt; do
             COLOUR=$OPTARG
             ;;
         k)
+            # Sanity check: don't allow this to be set to less than 1
             if [[ $OPTARG -ge 1 ]]; then
-                KEEP=$OPTARG
+                KEEP_DEST=$OPTARG
             else
-                KEEP=1
+                KEEP_DEST=1
             fi
             ;;
         n)
@@ -365,6 +367,13 @@ function expire_src_snaps {
     # certain if a given snapshot is currently being sent by another instance of
     # the script.
     logv "Expiring old snapshots on $SRC"
+    if [[ $(echo -e "foo\nbar"|$HEAD -n -1 2>/dev/null) != "foo" ]]; then
+        warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
+        return
+    fi
+    if [[ $KEEP_SRC -gt 1 ]]; then
+        logv "Not considering the $KEEP_SRC most recent snapshots of each dataset for deletion"
+    fi
     local latest_snap_num=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
     for fs in $@; do
         local latest_needed_snap_num=$latest_snap_num
@@ -378,7 +387,7 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
-        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP_SRC | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
                 do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
@@ -413,7 +422,7 @@ function expire_dest_snaps {
     for srcfs in $@; do
         destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
         logv "Expiring snapshots on $dest_host:$destfs"
-        for snapshot in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
+        for snapshot in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP_DEST); do
             do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $snapshot"
         done
     done
