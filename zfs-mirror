@@ -15,8 +15,8 @@ set -e
 # different systems
 PATH=/usr/gnu/bin:/usr/local/bin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH
 
-ZFS=zfs
-ZPOOL=zpool
+LOCAL_ZFS=zfs
+LOCAL_ZPOOL=zpool
 GREP=grep
 HEAD=head
 SSH=ssh
@@ -158,7 +158,7 @@ fi
 if [[ -n ${INVALID_OUTPUT_DEST+x} ]]; then
     warn "Argument to -o must be 'auto', 'syslog', or 'tty'. Using auto."
 fi
-for command in $ZFS $ZPOOL $GREP; do
+for command in $LOCAL_ZFS $LOCAL_ZPOOL $GREP; do
     if [[ ! -x $(which $command) ]]; then
         error "'$command' not found"
     fi
@@ -266,15 +266,15 @@ function cleanup {
 function zfs_supports_multiple_snapshots {
     trace $FUNCNAME $@
     # Does the usage note for zfs snapshot include '...' at the end.
-    $ZFS snapshot 2>&1 | $GREP -q -e '\.\.\.$'
+    $LOCAL_ZFS snapshot 2>&1 | $GREP -q -e '\.\.\.$'
     return $?
 }
 
 function get_source_filesystems {
     trace $FUNCNAME $@
     local dest=${1:-""}
-    for fs in $($ZFS list -rH -o name $SRC); do
-        if $ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q ""$dest; then
+    for fs in $($LOCAL_ZFS list -rH -o name $SRC); do
+        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q ""$dest; then
             logv "$fs configured as sync source"
             echo $fs
         fi
@@ -287,7 +287,7 @@ function dataset_exists {
     local dataset=$(echo $1 | cut -d: -f2)
     logv "Checking $dataset exists"
     if [[ $host == "localhost" ]]; then
-        local zfs=$ZFS
+        local zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
@@ -301,7 +301,7 @@ function latest_snapshot {
     local host=$(echo $1 | cut -d: -f1)
     local dataset=$(echo $1 | cut -d: -f2)
     if [[ $host == "localhost" ]]; then
-        local zfs=$ZFS
+        local zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
@@ -315,7 +315,7 @@ function get_destinations {
     trace $FUNCNAME $@
     local OLDIFS=$IFS
     IFS=','
-    for dest in $($ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1); do
+    for dest in $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1); do
         echo -n " $dest"
     done
     IFS=$OLDIFS
@@ -325,15 +325,15 @@ function zfs_send_incr {
     trace $FUNCNAME $@
     : $((DEPTH++))
 #$fs $DEST $old_snap $new_snap
-    local host=$(echo $2 | cut -d: -f1)
-    local pool=$(echo $2 | cut -d: -f2)
-    if [[ $host == "localhost" ]]; then
-        local zfs=$ZFS
+    local dest_host=$(echo $2 | cut -d: -f1)
+    local dest_pool=$(echo $2 | cut -d: -f2)
+    if [[ $dest_host == "localhost" ]]; then
+        local dest_zfs=$LOCAL_ZFS
     else
-        logv "Connecting to remote host '$host'"
-        local zfs="$BWLIMIT $SSH $host zfs"
+        logv "Connecting to remote host '$dest_host'"
+        local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
     fi
-    do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $zfs receive $ZFS_VERBOSE -Fud $pool"
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool"
     : $((DEPTH--))
     return 0
 }
@@ -342,16 +342,17 @@ function zfs_send_new {
     trace $FUNCNAME $@
     : $((DEPTH++))
 #$fs $DEST $new_snap
-    local host=$(echo $2 | cut -d: -f1)
-    local pool=$(echo $2 | cut -d: -f2)
-    if [[ $host == "localhost" ]]; then
-        local zfs=$ZFS
+    local dest_host=$(echo $2 | cut -d: -f1)
+    local dest_pool=$(echo $2 | cut -d: -f2)
+    if [[ $dest_host == "localhost" ]]; then
+        local dest_zfs=$LOCAL_ZFS
     else
-        logv "Connecting to remote host '$host'"
-        local zfs="$BWLIMIT $SSH $host zfs"
+        logv "Connecting to remote host '$dest_host'"
+        local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
     fi
-    do_conditionally "$ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $zfs receive -Fud $pool"
-    do_conditionally "$zfs set readonly=on $1"
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -Fud $dest_pool"
+    local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
+    do_conditionally "$dest_zfs set readonly=on $destfs"
     : $((DEPTH--))
     return 0
 }
@@ -364,7 +365,7 @@ function expire_src_snaps {
     # certain if a given snapshot is currently being sent by another instance of
     # the script.
     logv "Expiring old snapshots on $SRC"
-    local latest_snap_num=$($ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+    local latest_snap_num=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
     for fs in $@; do
         local latest_needed_snap_num=$latest_snap_num
         for dest in $(get_destinations $fs); do
@@ -377,10 +378,10 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
-        for snap_num in $($ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-                do_conditionally "$ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
             else
                 logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
             fi
@@ -398,26 +399,26 @@ function expire_dest_snaps {
         warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
         return
     fi
-    local host=$(echo $1 | cut -d: -f1)
-    local pool=$(echo $1 | cut -d: -f2)
-    if [[ $host == "localhost" ]]; then
-        local zfs=$ZFS
-        local zpool=$ZPOOL
+    local dest_host=$(echo $1 | cut -d: -f1)
+    local dest_pool=$(echo $1 | cut -d: -f2)
+    if [[ $dest_host == "localhost" ]]; then
+        local dest_zfs=$LOCAL_ZFS
+        local dest_zpool=$LOCAL_ZPOOL
     else
         logv "Connecting to remote host '$host'"
-        local zfs="$SSH $host zfs"
-        local zpool="$SSH $host zpool"
+        local dest_zfs="$SSH $host zfs"
+        local dest_zpool="$SSH $host zpool"
     fi
     shift
     for srcfs in $@; do
-        destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$pool/")
-        logv "Expiring snapshots on $host:$destfs"
-        for snapshot in $($zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
-            do_conditionally "$zfs destroy $ZFS_VERBOSE $snapshot"
+        destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
+        logv "Expiring snapshots on $dest_host:$destfs"
+        for snapshot in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
+            do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $snapshot"
         done
     done
     local threshold=95
-    local cap=$($zpool list -H -o capacity $pool)
+    local cap=$($dest_zpool list -H -o capacity $dest_pool)
     if [[ ! $? ]]; then
         # Strictly this check isn't necessary, but the previous check for this
         # pool's existence used 'zfs' rather than 'zpool', so this serves as a
@@ -439,7 +440,7 @@ function expire_dest_snaps {
 #    # numbers until that's the case, then destroy any older than that
 #    local all_source_filesystems=$(get_source_filesystems)
 #    for fs in $all_source_filesystems; do
-#        for snap_num in $($ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+#        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
 #            local next_snap=$fs@"$SNAPSHOT_PREFIX"_$((snap_num + 1))
 #            local snapshot_needed="false"
 #            # If unneeded - source and all configured destinations have this snapshot's successor
@@ -461,7 +462,7 @@ function expire_dest_snaps {
 #                logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
 #            elif [[ $snapshot_needed == "false" ]]; then
 #                logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-#                do_conditionally "$ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+#                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
 #            else
 #                echo "This can't happen: ($snapshot_needed)" >&2
 #                exit 1
@@ -494,7 +495,7 @@ if get_lock $GLOBAL_LOCKFILE; then
         if ! dataset_exists $DEST; then
             error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
         fi
-        old_snap=$($ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+        old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
         new_snap=$(($old_snap + 1))
 
         # define what snapshots we want to create
@@ -507,13 +508,13 @@ if get_lock $GLOBAL_LOCKFILE; then
 
         # Second task: create new snapshots
         if [[ $source_filesystems != "" ]]; then
-            do_conditionally "$ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
+            do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
             if zfs_supports_multiple_snapshots; then
-                do_conditionally "$ZFS snapshot $new_snapshots"
+                do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
             else
                 warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
                 for snap in $new_snapshots; do
-                    do_conditionally "$ZFS snapshot $snap"
+                    do_conditionally "$LOCAL_ZFS snapshot $snap"
                 done
             fi
         else
