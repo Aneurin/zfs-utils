@@ -306,7 +306,7 @@ function latest_snapshot {
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    local latest=$($zfs list -H -d 1 -r -o name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | tail -n 1 | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
+    local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | tail -n 1 | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
     echo -n ${latest:-0}
     logv "Latest snapshot of $1: ${latest:-0}"
 }
@@ -377,7 +377,7 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
-        for snap_num in $($ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+        for snap_num in $($ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
                 do_conditionally "$ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
@@ -412,7 +412,7 @@ function expire_dest_snaps {
     for srcfs in $@; do
         destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$pool/")
         logv "Expiring snapshots on $host:$destfs"
-        for snapshot in $($zfs list -H -d 1 -r -o name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
+        for snapshot in $($zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP); do
             do_conditionally "$zfs destroy $ZFS_VERBOSE $snapshot"
         done
     done
