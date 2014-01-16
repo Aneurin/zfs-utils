@@ -414,9 +414,9 @@ function expire_dest_snaps {
         local dest_zfs=$LOCAL_ZFS
         local dest_zpool=$LOCAL_ZPOOL
     else
-        logv "Connecting to remote host '$host'"
-        local dest_zfs="$SSH $host zfs"
-        local dest_zpool="$SSH $host zpool"
+        logv "Connecting to remote host '$dest_host'"
+        local dest_zfs="$SSH $dest_host zfs"
+        local dest_zpool="$SSH $dest_host zpool"
     fi
     shift
     for srcfs in $@; do
