@@ -361,7 +361,10 @@ function zfs_send_incr {
             pv="pv -s $size |"
         fi
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $pv $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool"
+    local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $pv $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool 2>&1 || true")
+    if [[ $error != "" ]]; then
+        warn "Error sending @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 ($error)"
+    fi
     : $((DEPTH--))
     return 0
 }
