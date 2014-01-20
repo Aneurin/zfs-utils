@@ -21,9 +21,11 @@ GREP=grep
 HEAD=head
 SSH=ssh
 TRICKLE=trickle
+PV=pv
 
 VERBOSE=0
 REALLY=1
+PROGRESS=0
 BWLIMIT=""
 KEEP_DEST=10
 KEEP_SRC=2
@@ -45,7 +47,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:k:nvDo:" opt; do
+while getopts "b:k:npvDo:" opt; do
     case $opt in
         b)
             if [[ -x $(which $TRICKLE) ]]; then
@@ -67,6 +69,14 @@ while getopts "b:k:nvDo:" opt; do
             ;;
         n)
             REALLY=0
+            ;;
+        p)
+            if [[ -x $(which $PV) ]]; then
+                PROGRESS=1
+            else
+                PV_NOT_FOUND=true
+                PROGRESS=0
+            fi
             ;;
         v)
             : $((VERBOSE++))
@@ -151,6 +161,10 @@ function error {
 
 if [[ -n ${TRICKLE_NOT_FOUND+x} ]]; then
     error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
+fi
+
+if [[ -n ${PV_NOT_FOUND+x} ]]; then
+    warn "Progress display requires 'pv', which was not found in \$PATH"
 fi
 
 if [[ -n ${INVALID_COLOUR+x} ]]; then
@@ -335,7 +349,19 @@ function zfs_send_incr {
         logv "Connecting to remote host '$dest_host'"
         local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool"
+    local pv=""
+    if [[ $PROGRESS == 1 ]]; then
+        # Invoking zfs send to get the transfer size can take a few seconds, but
+        # in practice it seems to warm some cache so the actual send take a few
+        # seconds less, balancing it out.
+        local size=$($LOCAL_ZFS send -nPi @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 2>&1 | tail -n 1|cut -f2)
+        # Don't bother showing progress bar for < 2MB. The inaccuracy in the
+        # estimate will probably be greater than the actual value.
+        if [[ $size -ge 2*1024*1024 ]]; then
+            pv="pv -s $size |"
+        fi
+    fi
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $pv $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool"
     : $((DEPTH--))
     return 0
 }
