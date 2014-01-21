@@ -337,6 +337,41 @@ function get_destinations {
     IFS=$OLDIFS
 }
 
+function zfs_try_send_incr {
+    # $1 source dataset
+    # $2 source snapshot number
+    # $3 destination snapshot number
+    # $4 destination zfs command
+    # $5 destination pool
+    trace $FUNCNAME $@
+    local pv=""
+    if [[ $REALLY == 1 ]] && [[ $PROGRESS == 1 ]]; then
+        # Invoking zfs send to get the transfer size can take a few seconds, but
+        # in practice it seems to warm some cache so the actual send take a few
+        # seconds less, balancing it out.
+        local size=$($LOCAL_ZFS send -nPi @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 2>&1 | tail -n 1|cut -f2)
+        # Don't bother showing progress bar for < 5MB. The inaccuracy in the
+        # estimate will probably be greater than the actual value.
+        if [[ $size -ge 5*1024*1024 ]]; then
+            pv="pv -s $size |"
+        fi
+    fi
+    local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -Fud $5 2>&1 || true")
+    if [[ $error != "" ]]; then
+        warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error)"
+        if [[ $error == "cannot receive incremental stream: invalid backup stream" ]]; then
+            warn "Retrying:"
+            error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -Fud $5 2>&1 || true")
+            if [[ $error != "" ]]; then
+                warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error). Giving up for now."
+            else
+                warn "Retry successful"
+            fi
+        fi
+    fi
+    echo $error
+}
+
 function zfs_send_incr {
     trace $FUNCNAME $@
     : $((DEPTH++))
@@ -349,21 +384,23 @@ function zfs_send_incr {
         logv "Connecting to remote host '$dest_host'"
         local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
     fi
-    local pv=""
-    if [[ $PROGRESS == 1 ]]; then
-        # Invoking zfs send to get the transfer size can take a few seconds, but
-        # in practice it seems to warm some cache so the actual send take a few
-        # seconds less, balancing it out.
-        local size=$($LOCAL_ZFS send -nPi @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 2>&1 | tail -n 1|cut -f2)
-        # Don't bother showing progress bar for < 2MB. The inaccuracy in the
-        # estimate will probably be greater than the actual value.
-        if [[ $size -ge 2*1024*1024 ]]; then
-            pv="pv -s $size |"
-        fi
-    fi
-    local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 | $pv $dest_zfs receive $ZFS_VERBOSE -Fud $dest_pool 2>&1 || true")
+    local error=$(zfs_try_send_incr $1 $3 $4 "$dest_zfs" "$dest_pool")
     if [[ $error != "" ]]; then
-        warn "Error sending @"$SNAPSHOT_PREFIX"_$3 $1@"$SNAPSHOT_PREFIX"_$4 ($error)"
+        if [[ $error == "cannot receive incremental stream: invalid backup stream" ]] && [[ $4 -gt $(( $3 + 1 )) ]]; then
+            warn "Attempting to send intervening snapshots one-by-one:"
+            local intervening_snapshots=$($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $1 2> /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
+            local prev=$3
+            for snapshot in $intervening_snapshots; do
+                if [[ $snapshot -le $prev ]]; then
+                    continue
+                fi
+                error=$(zfs_try_send_incr $1 $prev $snapshot "$dest_zfs" "$dest_pool")
+                if [[ $error != "" ]]; then
+                    break
+                fi
+                prev=$snapshot
+            done
+        fi
     fi
     : $((DEPTH--))
     return 0
