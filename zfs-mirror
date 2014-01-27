@@ -357,6 +357,7 @@ function zfs_try_send_incr {
         fi
     fi
     local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -Fud $5 2>&1 || true")
+    error=${error%%\\r}
     if [[ $error != "" ]]; then
         warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error)"
         if [[ $error == "cannot receive incremental stream: invalid backup stream" ]]; then
