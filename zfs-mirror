@@ -32,6 +32,8 @@ KEEP_SRC=2
 ZFS_SEND_DEDUP=""
 LOG_TO_STDERR=false
 COLOUR="auto"
+XZSEND=""
+XZRECV=""
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -337,6 +339,18 @@ function get_destinations {
     IFS=$OLDIFS
 }
 
+function host_has_cmd {
+    trace $FUNCNAME $@
+    local dest_host=$(echo $1 | cut -d: -f1)
+    if [[ $dest_host == "localhost" ]]; then
+        $2 > /dev/null 2>&1
+    else
+        logv "Connecting to remote host '$dest_host'"
+        $SSH $dest_host $2 > /dev/null 2>&1
+    fi
+    return $?
+}
+
 function zfs_try_send_incr {
     # $1 source dataset
     # $2 source snapshot number
@@ -384,7 +398,7 @@ function zfs_send_incr {
         local dest_zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$dest_host'"
-        local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
+        local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
     fi
     local error=$(zfs_try_send_incr $1 $3 $4 "$dest_zfs" "$dest_pool")
     if [[ $error != "" ]]; then
@@ -418,7 +432,7 @@ function zfs_send_new {
         local dest_zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$dest_host'"
-        local dest_zfs="$BWLIMIT $SSH $dest_host zfs"
+        local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
     fi
     do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -Fud $dest_pool"
     local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
@@ -600,6 +614,10 @@ if get_lock $GLOBAL_LOCKFILE; then
         release_lock $GLOBAL_LOCKFILE
 
         # Third task: sync new snapshots
+        if host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
+            XZSEND="xz |"
+            XZRECV="xzcat \|"
+        fi
         for fs in $source_filesystems; do
             old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
             if [[ $old_snap -gt 0 ]]; then
