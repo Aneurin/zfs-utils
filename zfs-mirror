@@ -324,7 +324,7 @@ function latest_snapshot {
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | tail -n 1 | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
+    local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | tail -n 1)
     echo -n ${latest:-0}
     logv "Latest snapshot of $1: ${latest:-0}"
 }
@@ -404,7 +404,7 @@ function zfs_send_incr {
     if [[ $error != "" ]]; then
         if [[ $error == "cannot receive incremental stream: invalid backup stream" ]] && [[ $4 -gt $(( $3 + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
-            local intervening_snapshots=$($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $1 2> /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//")
+            local intervening_snapshots=$($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $1 2> /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n)
             local prev=$3
             for snapshot in $intervening_snapshots; do
                 if [[ $snapshot -le $prev ]]; then
@@ -469,7 +469,7 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
-        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP_SRC | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
+        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_SRC); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
                 do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
@@ -504,8 +504,8 @@ function expire_dest_snaps {
     for srcfs in $@; do
         destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
         logv "Expiring snapshots on $dest_host:$destfs"
-        for snapshot in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | $HEAD -n -$KEEP_DEST); do
-            do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $snapshot"
+        for snap_num in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_DEST); do
+            do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $destfs@"$SNAPSHOT_PREFIX"_$snap_num"
         done
     done
     local threshold=95
