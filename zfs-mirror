@@ -370,12 +370,12 @@ function zfs_try_send_incr {
             pv="pv -s $size |"
         fi
     fi
-    local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -Fud $5 2>&1 || true")
+    local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
     error=${error%%\\r}
     if [[ $error != "" ]]; then
         if [[ $error == "cannot receive incremental stream: invalid backup stream" ]]; then
             log "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error). Retrying:"
-            error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -Fud $5 2>&1 || true")
+            error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
             if [[ $error != "" ]]; then
                 warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error)"
             else
@@ -434,7 +434,7 @@ function zfs_send_new {
         logv "Connecting to remote host '$dest_host'"
         local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -Fud $dest_pool"
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -ud $dest_pool"
     local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
     do_conditionally "$dest_zfs set readonly=on $destfs"
     : $((DEPTH--))
