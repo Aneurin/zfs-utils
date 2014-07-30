@@ -49,7 +49,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:k:npvDo:" opt; do
+while getopts "b:c:k:npvDo:" opt; do
     case $opt in
         b)
             if [[ -x $(which $TRICKLE) ]]; then
