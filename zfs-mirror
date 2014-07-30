@@ -32,6 +32,7 @@ KEEP_SRC=2
 ZFS_SEND_DEDUP=""
 LOG_TO_STDERR=false
 COLOUR="auto"
+COMPRESS=false
 XZSEND=""
 XZRECV=""
 
@@ -49,7 +50,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:k:npvDo:" opt; do
+while getopts "b:c:k:npvDo:z" opt; do
     case $opt in
         b)
             if [[ -x $(which $TRICKLE) ]]; then
@@ -100,6 +101,9 @@ while getopts "b:c:k:npvDo:" opt; do
                     INVALID_OUTPUT_DEST=true
                     ;;
             esac
+            ;;
+        z)
+            COMPRESS=true
             ;;
     esac
 done
@@ -614,7 +618,7 @@ if get_lock $GLOBAL_LOCKFILE; then
         release_lock $GLOBAL_LOCKFILE
 
         # Third task: sync new snapshots
-        if host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
+        if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
             XZSEND="xz |"
             XZRECV="xzcat \|"
         fi
