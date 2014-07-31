@@ -165,11 +165,11 @@ function out {
 }
 
 function warn {
-    echo -e "[$COL_YELLOW""Warn: $COL_END]" $@ | out
+    echo -e "[$COL_YELLOW""Warn: $COL_END]" "$*" | out
 }
 
 function error {
-    echo -e "[$COL_RED""Error:$COL_END]" $1 | out
+    echo -e "[$COL_RED""Error:$COL_END]" "$1" | out
     local status=${2:-1}
     exit $status
 }
@@ -240,13 +240,13 @@ function trace {
 
 function log {
     if [[ $VERBOSE -ge 1 ]]; then
-        echo -e "[$COL_GREEN""Info: $COL_END]" $@ | out
+        echo -e "[$COL_GREEN""Info: $COL_END]" "$*" | out
     fi
 }
 
 function logv {
     if [[ $VERBOSE -ge 2 ]]; then
-        echo "[Debug:]" $@ | out
+        echo "[Debug:]" "$*" | out
     fi
 }
 
