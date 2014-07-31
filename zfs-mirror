@@ -262,17 +262,24 @@ function do_conditionally {
 }
 
 function duration {
+    # Second argument signifies that we are being called recursively, and
+    # should not output anything if the remainder is 0.
+    if [[ $1 -eq 0 ]] && ${2:-false}; then
+        return 0
+    elif ${2:-false}; then
+        echo -n " "
+    fi
     if [[ $1 -le 60 ]]; then
         echo -n "${1}s"
     elif [[ $1 -le 3600 ]]; then
         m=$(($1 / 60))
-        echo -n "${m}m $(duration $(($1 - ($m * 60) )) )"
+        echo -n "${m}m$(duration $(($1 - ($m * 60) )) true)"
     elif [[ $1 -le $((3600 * 24)) ]]; then
         h=$(($1 / 3600))
-        echo -n "${h}h $(duration $(($1 - ($h * 3600) )) )"
+        echo -n "${h}h$(duration $(($1 - ($h * 3600) )) true)"
     else
         d=$(($1 / (3600 * 24) ))
-        echo -n "${d}d $(duration $(($1 - ($d * 3600 * 24) )) )"
+        echo -n "${d}d$(duration $(($1 - ($d * 3600 * 24) )) true)"
     fi
 }
 
