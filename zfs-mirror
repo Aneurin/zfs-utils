@@ -36,6 +36,8 @@ COMPRESS=false
 XZSEND=""
 XZRECV=""
 USE_TEMP_FILE=false
+AGE_REPORTING=false
+AGE_WARNING_SECONDS=$((60 * 60 * 24))
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -51,7 +53,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:k:nptvDo:z" opt; do
+while getopts "b:c:k:nprtvDo:z" opt; do
     case $opt in
         b)
             if [[ -x $(which $TRICKLE) ]]; then
@@ -81,6 +83,9 @@ while getopts "b:c:k:nptvDo:z" opt; do
                 PV_NOT_FOUND=true
                 PROGRESS=0
             fi
+            ;;
+        r)
+            AGE_REPORTING=true
             ;;
         t)
             USE_TEMP_FILE=true
@@ -209,20 +214,20 @@ fi
 GLOBAL_LOCKFILE=$LOCK_PATH/zfs-mirror.lock
 DEST_LOCKFILE=$LOCK_PATH/zfs-mirror-$DEST.lock
 
-if [[ $VERBOSE -ge 3 ]]; then
+if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
     if [[ -e /usr/gnu/bin/date ]]; then
-        DATE="/usr/gnu/bin/date"
+        DATE_COMMAND="/usr/gnu/bin/date"
     else
-        DATE="date"
+        DATE_COMMAND="date"
     fi
-    if ! which $DATE > /dev/null 2>&1; then
+    if ! which $DATE_COMMAND > /dev/null 2>&1; then
         warn "'date' not found; trace output will lack timestamps"
         DATE=""
-    elif ! $DATE --rfc-3339=ns > /dev/null 2>&1; then
+    elif ! $DATE_COMMAND --rfc-3339=ns > /dev/null 2>&1; then
         warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
-        DATE="$DATE +%Y/%m/%d/%H.%M.%S"
+        DATE="$DATE_COMMAND +%Y/%m/%d/%H.%M.%S"
     else
-        DATE="$DATE --rfc-3339=ns"
+        DATE="$DATE_COMMAND --rfc-3339=ns"
     fi
 fi
 
@@ -253,6 +258,21 @@ function do_conditionally {
         eval $@
     else
         log "Would run: $@"
+    fi
+}
+
+function duration {
+    if [[ $1 -le 60 ]]; then
+        echo -n "${1}s"
+    elif [[ $1 -le 3600 ]]; then
+        m=$(($1 / 60))
+        echo -n "${m}m $(duration $(($1 - ($m * 60) )) )"
+    elif [[ $1 -le $((3600 * 24)) ]]; then
+        h=$(($1 / 3600))
+        echo -n "${h}h $(duration $(($1 - ($h * 3600) )) )"
+    else
+        d=$(($1 / (3600 * 24) ))
+        echo -n "${d}d $(duration $(($1 - ($d * 3600 * 24) )) )"
     fi
 }
 
@@ -335,6 +355,26 @@ function latest_snapshot {
     local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | tail -n 1)
     echo -n ${latest:-0}
     logv "Latest snapshot of $1: ${latest:-0}"
+}
+
+function snapshot_created {
+    trace $FUNCNAME $@
+    local host=$(echo $1 | cut -d: -f1)
+    local snapshot=$(echo $1 | cut -d: -f2)
+    if [[ $host == "localhost" ]]; then
+        local zfs=$LOCAL_ZFS
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$SSH $host zfs"
+    fi
+    local creation=$($zfs get -H -p -o value creation $snapshot 2>  /dev/null)
+    case $creation in
+        ''|*[!0-9]*) warn "Couldn't get creation time for $snapshot on $host (got $creation); returning 0"
+        creation=0
+        ;;
+    esac
+    echo -n ${creation}
+    logv "Creation time of $1: ${creation}"
 }
 
 function get_destinations {
@@ -591,80 +631,106 @@ while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
     sleep 10
 done
 
-if get_lock $GLOBAL_LOCKFILE; then
-    # It's probably not worth waiting for the per-destination lock, since it
-    # could be held for a long time (ie. there's a sync in progress)
-    if ! dataset_exists localhost:$SRC; then
-        error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+if $AGE_REPORTING; then
+    log "Checking for snapshots older than $(duration $AGE_WARNING_SECONDS):"
+    if ! which $DATE_COMMAND > /dev/null 2>&1; then
+        error "'date' not found; can't check snapshot ages"
     fi
-    if get_lock $DEST_LOCKFILE; then
-        if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
-            error "'$SSH' not found"
-        fi
-        if ! dataset_exists $DEST; then
-            error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
-        fi
-        old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
-        new_snap=$(($old_snap + 1))
-
-        # define what snapshots we want to create
-        logv "Source filesystems:"
-        source_filesystems=$(get_source_filesystems $DEST)
-        new_snapshots=""
-        for fs in $source_filesystems; do
-            new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
-        done
-
-        # Second task: create new snapshots
-        if [[ $source_filesystems != "" ]]; then
-            do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
-            if zfs_supports_multiple_snapshots; then
-                do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
-            else
-                warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
-                for snap in $new_snapshots; do
-                    do_conditionally "$LOCAL_ZFS snapshot $snap"
-                done
-            fi
+    logv "Source filesystems:"
+    source_filesystems=$(get_source_filesystems $DEST)
+    for fs in $source_filesystems; do
+        latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
+        latest_snap=$SNAPSHOT_PREFIX"_"$latest_snap_num
+        if [[ $latest_snap_num -le 0 ]]; then
+            warn "Can't find any snapshots of $fs on $DEST; either this dataset has never been synchronised, or there was a connection problem"
+            created=0
         else
-            error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
+            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/")@$latest_snap)
         fi
-        release_lock $GLOBAL_LOCKFILE
+        time_now=$($DATE_COMMAND +%s)
+        age=$(($time_now - $created))
+        if [[ $age -gt $AGE_WARNING_SECONDS ]]; then
+            warn "Latest snapshot of $fs on $DEST: $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+        else
+            log "Latest snapshot of $fs on $DEST: $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+        fi
+    done
+else
+    if get_lock $GLOBAL_LOCKFILE; then
+        # It's probably not worth waiting for the per-destination lock, since it
+        # could be held for a long time (ie. there's a sync in progress)
+        if ! dataset_exists localhost:$SRC; then
+            error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+        fi
+        if get_lock $DEST_LOCKFILE; then
+            if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+                error "'$SSH' not found"
+            fi
+            if ! dataset_exists $DEST; then
+                error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
+            fi
+            old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+            new_snap=$(($old_snap + 1))
 
-        # Third task: sync new snapshots
-        if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
-            XZSEND="xz |"
-            XZRECV="xzcat \|"
-        fi
-        for fs in $source_filesystems; do
-            old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
-            if [[ $old_snap -gt 0 ]]; then
-                if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
-                    error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $SRC" $ERR_SRC_SNAP_MISSING
+            # define what snapshots we want to create
+            logv "Source filesystems:"
+            source_filesystems=$(get_source_filesystems $DEST)
+            new_snapshots=""
+            for fs in $source_filesystems; do
+                new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
+            done
+
+            # Second task: create new snapshots
+            if [[ $source_filesystems != "" ]]; then
+                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
+                if zfs_supports_multiple_snapshots; then
+                    do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
+                else
+                    warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
+                    for snap in $new_snapshots; do
+                        do_conditionally "$LOCAL_ZFS snapshot $snap"
+                    done
                 fi
-                zfs_send_incr $fs $DEST $old_snap $new_snap
             else
-                zfs_send_new $fs $DEST $new_snap
+                error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
             fi
-            if [[ ! $? ]]; then
-                error "Failed to send $fs@$new_snap to $DEST; giving up" $ERR_COULDNT_SEND
+            release_lock $GLOBAL_LOCKFILE
+
+            # Third task: sync new snapshots
+            if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
+                XZSEND="xz |"
+                XZRECV="xzcat \|"
             fi
-        done
-        # Fourth task: expire unneeded snapshots on source
-        if get_lock $GLOBAL_LOCKFILE; then
-            # It's not critical that this done now - for one thing, in all
-            # probability whatever process is holding the lock will do this
-            # snapshot expiration anyway - so don't bother waiting for it to
-            # become available.
-            expire_src_snaps $source_filesystems
+            for fs in $source_filesystems; do
+                old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
+                if [[ $old_snap -gt 0 ]]; then
+                    if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
+                        error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $SRC" $ERR_SRC_SNAP_MISSING
+                    fi
+                    zfs_send_incr $fs $DEST $old_snap $new_snap
+                else
+                    zfs_send_new $fs $DEST $new_snap
+                fi
+                if [[ ! $? ]]; then
+                    error "Failed to send $fs@$new_snap to $DEST; giving up" $ERR_COULDNT_SEND
+                fi
+            done
+            # Fourth task: expire unneeded snapshots on source
+            if get_lock $GLOBAL_LOCKFILE; then
+                # It's not critical that this done now - for one thing, in all
+                # probability whatever process is holding the lock will do this
+                # snapshot expiration anyway - so don't bother waiting for it to
+                # become available.
+                expire_src_snaps $source_filesystems
+            fi
+            # Fifth task: expire unwanted snapshots on dest
+            expire_dest_snaps $DEST $source_filesystems
+        else
+            log "Couldn't get lock for $DEST; giving up"
+            exit 1
         fi
-        # Fifth task: expire unwanted snapshots on dest
-        expire_dest_snaps $DEST $source_filesystems
     else
-        log "Couldn't get lock for $DEST; giving up"
+        log "Couldn't get global zfs-mirror lock after $WAITTIME seconds; giving up"
         exit 1
     fi
-else
-    log "Couldn't get global zfs-mirror lock after $WAITTIME seconds; giving up"
-    exit 1
-fi
+fi # !AGE_REPORTING
