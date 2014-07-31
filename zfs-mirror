@@ -638,7 +638,15 @@ if $AGE_REPORTING; then
     fi
     logv "Source filesystems:"
     source_filesystems=$(get_source_filesystems $DEST)
+    max_name_len=0
     for fs in $source_filesystems; do
+        if [[ ${#fs} -gt $max_name_len ]]; then
+            max_name_len=${#fs}
+        fi
+    done
+    for fs in $source_filesystems; do
+        pad_len=$((max_name_len - ${#fs}))
+        padding=$(printf "%*.s" $pad_len)
         latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
         latest_snap=$SNAPSHOT_PREFIX"_"$latest_snap_num
         if [[ $latest_snap_num -le 0 ]]; then
@@ -650,9 +658,9 @@ if $AGE_REPORTING; then
         time_now=$($DATE_COMMAND +%s)
         age=$(($time_now - $created))
         if [[ $age -gt $AGE_WARNING_SECONDS ]]; then
-            warn "Latest snapshot of $fs on $DEST: $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+            warn "Latest snapshot of $fs on $DEST:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
         else
-            log "Latest snapshot of $fs on $DEST: $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+            log "Latest snapshot of $fs on $DEST:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
         fi
     done
 else
