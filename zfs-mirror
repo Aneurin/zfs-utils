@@ -35,6 +35,7 @@ COLOUR="auto"
 COMPRESS=false
 XZSEND=""
 XZRECV=""
+USE_TEMP_FILE=false
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -50,7 +51,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:k:npvDo:z" opt; do
+while getopts "b:c:k:nptvDo:z" opt; do
     case $opt in
         b)
             if [[ -x $(which $TRICKLE) ]]; then
@@ -80,6 +81,9 @@ while getopts "b:c:k:npvDo:z" opt; do
                 PV_NOT_FOUND=true
                 PROGRESS=0
             fi
+            ;;
+        t)
+            USE_TEMP_FILE=true
             ;;
         v)
             : $((VERBOSE++))
@@ -402,7 +406,12 @@ function zfs_send_incr {
         local dest_zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$dest_host'"
-        local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+        if $USE_TEMP_FILE; then
+            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
+            dest_pool=$dest_pool'"'
+        else
+            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+        fi
     fi
     local error=$(zfs_try_send_incr $1 $3 $4 "$dest_zfs" "$dest_pool")
     if [[ $error != "" ]]; then
@@ -436,7 +445,12 @@ function zfs_send_new {
         local dest_zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$dest_host'"
-        local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+        if $USE_TEMP_FILE; then
+            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
+            dest_pool=$dest_pool'"'
+        else
+            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+        fi
     fi
     do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -ud $dest_pool"
     local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")

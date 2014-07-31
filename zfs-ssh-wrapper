@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# NB: This is intended to provide a certain degree of resistance against
+# *accidents*. It can be trivially circumvented and provides no *security*
+# whatsoever.
+
+set -o nounset
+
+PATH=/sbin:/bin:/usr/bin
+
+TMPDIR=/tmp
+
+__zfs_receive_tmpfile()
+{
+    local tmpfile=$(mktemp $TMPDIR/__zfs_receive_tmpfile.XXXXXX)
+    cat > $tmpfile
+    cat $tmpfile | eval $@
+    rm $tmpfile
+}
+
+if [[ $SSH_ORIGINAL_COMMAND == "zfs list"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zfs get"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zfs receive"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zfs destroy"*@* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zfs set readonly=on"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "xzcat --version" ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "xzcat | zfs receive"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zpool list"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zpool set canmount=noauto"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "__zfs_receive_tmpfile"* ]]; then
+    eval $SSH_ORIGINAL_COMMAND
+else
+    echo "\"$SSH_ORIGINAL_COMMAND\" not permitted"
+    exit 1
+fi
