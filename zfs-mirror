@@ -614,46 +614,6 @@ function expire_dest_snaps {
     return 0
 }
 
-#function expire_src_snaps {
-#    # This might be better done entirely differently: determine the last
-#    # snapshot number for which a full set of replicas exist, and destroy any
-#    # older. IE:
-#    # Starting at the current snapshot number, for each configured source fs,
-#    # check if each configure dest has that snapshot, and decrement snapshot
-#    # numbers until that's the case, then destroy any older than that
-#    local all_source_filesystems=$(get_source_filesystems)
-#    for fs in $all_source_filesystems; do
-#        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//"); do
-#            local next_snap=$fs@"$SNAPSHOT_PREFIX"_$((snap_num + 1))
-#            local snapshot_needed="false"
-#            # If unneeded - source and all configured destinations have this snapshot's successor
-#            # This is currently too conservative - if the snapshot is so out of
-#            # date that the destination no longer has it, then we mark it as
-#            # still needed
-#            if dataset_exists localhost:$next_snap; then
-#                for dest in $(get_destinations $fs); do
-#                    local dest_next_snap=$(echo -n "$next_snap" | sed -e "s/^$SRC/$dest/")
-#                    if ! dataset_exists $dest_next_snap; then
-#                        snapshot_needed="true"
-#                        break
-#                    fi
-#                done
-#            else
-#                snapshot_needed="true"
-#            fi
-#            if [[ $snapshot_needed == "true" ]]; then
-#                logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-#            elif [[ $snapshot_needed == "false" ]]; then
-#                logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-#                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-#            else
-#                echo "This can't happen: ($snapshot_needed)" >&2
-#                exit 1
-#            fi
-#        done
-#    done
-#}
-
 trap 'cleanup $?' INT TERM EXIT
 
 # It's worth waiting for the global lock to become available, as it's not
