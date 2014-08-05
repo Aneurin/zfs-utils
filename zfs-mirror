@@ -616,6 +616,16 @@ function expire_dest_snaps {
 
 trap 'cleanup $?' INT TERM EXIT
 
+if ! dataset_exists localhost:$SRC; then
+    error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+fi
+if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+    error "'$SSH' not found"
+fi
+if ! dataset_exists $DEST; then
+    error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
+fi
+
 # It's worth waiting for the global lock to become available, as it's not
 # typically held for very long
 WAITTIME=0
@@ -626,7 +636,8 @@ while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
 done
 
 if $AGE_REPORTING; then
-    log "Checking for snapshots older than $(duration $AGE_WARNING_SECONDS):"
+    log "Checking for snapshots on $DEST older than $(duration $AGE_WARNING_SECONDS):"
+    [ -f $DEST_LOCKFILE ] && log "There appears to be a synchronisation to $DEST currently in progress"
     if ! which $DATE_COMMAND > /dev/null 2>&1; then
         error "'date' not found; can't check snapshot ages"
     fi
@@ -661,16 +672,7 @@ else
     if get_lock $GLOBAL_LOCKFILE; then
         # It's probably not worth waiting for the per-destination lock, since it
         # could be held for a long time (ie. there's a sync in progress)
-        if ! dataset_exists localhost:$SRC; then
-            error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
-        fi
         if get_lock $DEST_LOCKFILE; then
-            if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
-                error "'$SSH' not found"
-            fi
-            if ! dataset_exists $DEST; then
-                error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
-            fi
             old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
             new_snap=$(($old_snap + 1))
 
