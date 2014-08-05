@@ -262,6 +262,7 @@ function do_conditionally {
 }
 
 function duration {
+    trace $FUNCNAME $@
     # Second argument signifies that we are being called recursively, and
     # should not output anything if the remainder is 0.
     if [[ $1 -eq 0 ]] && ${2:-false}; then
