@@ -284,6 +284,21 @@ function duration {
     fi
 }
 
+function human_readable_size {
+    trace $FUNCNAME $@
+    if [[ $1 -eq 0 ]]; then
+        echo "0B"
+    elif [[ $1 -lt 1024 ]]; then
+        echo "${1}B"
+    elif [[ $1 -lt $((1024 * 1024)) ]]; then
+        echo "$(($1 / 1024))kB"
+    elif [[ $1 -lt $((1024 * 1024 * 1024)) ]]; then
+        echo "$(($1 / (1024 * 1024) ))MB"
+    else
+        echo $(echo "$1  $((1024 * 1024 * 1024))" | awk '{printf "%.2fGB", $1/$2}')
+    fi
+}
+
 function get_lock {
     trace $FUNCNAME $@
     logv "Trying to take lock: $1"
@@ -407,6 +422,27 @@ function host_has_cmd {
     return $?
 }
 
+function get_pv_cmd {
+    trace $FUNCNAME $@
+    # Expects args of the form "dataset@snapshot" or "-i @snapshot1 dataset@snapshot2"
+    local pv=""
+    if [[ $REALLY == 1 ]] && [[ $PROGRESS == 1 ]]; then
+        # Invoking zfs send to get the transfer size can take a few seconds, but
+        # in practice it seems to warm some cache so the actual send take a few
+        # seconds less, balancing it out.
+        local size=$($LOCAL_ZFS send -nP $@ 2>&1 | tail -n 1|cut -f2)
+        log "$(human_readable_size $size) to send (estimated)"
+        # Don't bother showing progress bar for < 5MB. The inaccuracy in the
+        # estimate will probably be greater than the actual value.
+        if [[ $size -ge 5*1024*1024 ]]; then
+            pv="pv -s $size |"
+        else
+            logv "Not showing progress for transfer estimated as less than 5MB"
+        fi
+    fi
+    echo $pv
+}
+
 function zfs_try_send_incr {
     # $1 source dataset
     # $2 source snapshot number
@@ -414,18 +450,7 @@ function zfs_try_send_incr {
     # $4 destination zfs command
     # $5 destination pool
     trace $FUNCNAME $@
-    local pv=""
-    if [[ $REALLY == 1 ]] && [[ $PROGRESS == 1 ]]; then
-        # Invoking zfs send to get the transfer size can take a few seconds, but
-        # in practice it seems to warm some cache so the actual send take a few
-        # seconds less, balancing it out.
-        local size=$($LOCAL_ZFS send -nPi @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 2>&1 | tail -n 1|cut -f2)
-        # Don't bother showing progress bar for < 5MB. The inaccuracy in the
-        # estimate will probably be greater than the actual value.
-        if [[ $size -ge 5*1024*1024 ]]; then
-            pv="pv -s $size |"
-        fi
-    fi
+    local pv=$(get_pv_cmd -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3)
     local error=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
     error=${error%%\\r}
     if [[ $error != "" ]]; then
@@ -489,6 +514,7 @@ function zfs_send_new {
 #$fs $DEST $new_snap
     local dest_host=$(echo $2 | cut -d: -f1)
     local dest_pool=$(echo $2 | cut -d: -f2)
+    local pv=$(get_pv_cmd $1@"$SNAPSHOT_PREFIX"_$3)
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
     else
@@ -500,7 +526,7 @@ function zfs_send_new {
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $dest_zfs receive -ud $dest_pool"
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $pv $dest_zfs receive -ud $dest_pool"
     local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
     do_conditionally "$dest_zfs set readonly=on $destfs"
     : $((DEPTH--))
