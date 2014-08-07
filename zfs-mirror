@@ -652,6 +652,80 @@ function age_report {
     done
 }
 
+function mirror {
+    trace $FUNCNAME $@
+    local src=$1
+    local dest=$2
+    if get_lock $SRC_LOCKFILE; then
+        # It's probably not worth waiting for the per-destination lock, since it
+        # could be held for a long time (ie. there's a sync in progress)
+        if get_lock $DEST_LOCKFILE; then
+            local old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $src)
+            local new_snap=$(($old_snap + 1))
+
+            # define what snapshots we want to create
+            logv "Source filesystems:"
+            local source_filesystems=$(get_source_filesystems $dest)
+            local new_snapshots=""
+            for fs in $source_filesystems; do
+                new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
+            done
+
+            # Second task: create new snapshots
+            if [[ $source_filesystems != "" ]]; then
+                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $src"
+                if zfs_supports_multiple_snapshots; then
+                    do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
+                else
+                    warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
+                    for snap in $new_snapshots; do
+                        do_conditionally "$LOCAL_ZFS snapshot $snap"
+                    done
+                fi
+            else
+                error "No source filesytems defined for destination $dest" $ERR_NO_SOURCES_DEFINED
+            fi
+            release_lock $SRC_LOCKFILE
+
+            # Third task: sync new snapshots
+            if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $dest "xzcat --version"; then
+                XZSEND="xz |"
+                XZRECV="xzcat \|"
+            fi
+            for fs in $source_filesystems; do
+                old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                if [[ $old_snap -gt 0 ]]; then
+                    if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
+                        error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
+                    fi
+                    zfs_send_incr $fs $dest $old_snap $new_snap
+                else
+                    zfs_send_new $fs $dest $new_snap
+                fi
+                if [[ ! $? ]]; then
+                    error "Failed to send $fs@$new_snap to $dest; giving up" $ERR_COULDNT_SEND
+                fi
+            done
+            # Fourth task: expire unneeded snapshots on source
+            if get_lock $SRC_LOCKFILE; then
+                # It's not critical that this done now - for one thing, in all
+                # probability whatever process is holding the lock will do this
+                # snapshot expiration anyway - so don't bother waiting for it to
+                # become available.
+                expire_src_snaps $source_filesystems
+            fi
+            # Fifth task: expire unwanted snapshots on dest
+            expire_dest_snaps $dest $source_filesystems
+        else
+            log "Couldn't get lock for $dest; giving up"
+            exit 1
+        fi
+    else
+        log "Couldn't get lock for $src after $WAITTIME seconds; giving up"
+        exit 1
+    fi
+}
+
 trap 'cleanup $?' INT TERM EXIT
 
 if ! dataset_exists localhost:$SRC; then
@@ -679,72 +753,5 @@ done
 if $AGE_REPORTING; then
     age_report $DEST
 else
-    if get_lock $SRC_LOCKFILE; then
-        # It's probably not worth waiting for the per-destination lock, since it
-        # could be held for a long time (ie. there's a sync in progress)
-        if get_lock $DEST_LOCKFILE; then
-            old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
-            new_snap=$(($old_snap + 1))
-
-            # define what snapshots we want to create
-            logv "Source filesystems:"
-            source_filesystems=$(get_source_filesystems $DEST)
-            new_snapshots=""
-            for fs in $source_filesystems; do
-                new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
-            done
-
-            # Second task: create new snapshots
-            if [[ $source_filesystems != "" ]]; then
-                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $SRC"
-                if zfs_supports_multiple_snapshots; then
-                    do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
-                else
-                    warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
-                    for snap in $new_snapshots; do
-                        do_conditionally "$LOCAL_ZFS snapshot $snap"
-                    done
-                fi
-            else
-                error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
-            fi
-            release_lock $SRC_LOCKFILE
-
-            # Third task: sync new snapshots
-            if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
-                XZSEND="xz |"
-                XZRECV="xzcat \|"
-            fi
-            for fs in $source_filesystems; do
-                old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
-                if [[ $old_snap -gt 0 ]]; then
-                    if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
-                        error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $SRC" $ERR_SRC_SNAP_MISSING
-                    fi
-                    zfs_send_incr $fs $DEST $old_snap $new_snap
-                else
-                    zfs_send_new $fs $DEST $new_snap
-                fi
-                if [[ ! $? ]]; then
-                    error "Failed to send $fs@$new_snap to $DEST; giving up" $ERR_COULDNT_SEND
-                fi
-            done
-            # Fourth task: expire unneeded snapshots on source
-            if get_lock $SRC_LOCKFILE; then
-                # It's not critical that this done now - for one thing, in all
-                # probability whatever process is holding the lock will do this
-                # snapshot expiration anyway - so don't bother waiting for it to
-                # become available.
-                expire_src_snaps $source_filesystems
-            fi
-            # Fifth task: expire unwanted snapshots on dest
-            expire_dest_snaps $DEST $source_filesystems
-        else
-            log "Couldn't get lock for $DEST; giving up"
-            exit 1
-        fi
-    else
-        log "Couldn't get lock for $SRC after $WAITTIME seconds; giving up"
-        exit 1
-    fi
-fi # !AGE_REPORTING
+    mirror $SRC $DEST
+fi
