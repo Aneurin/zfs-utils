@@ -206,8 +206,6 @@ if [[ $(id -u) -eq 0 ]]; then
 else
     LOCK_PATH=$HOME
 fi
-GLOBAL_LOCKFILE=$LOCK_PATH/zfs-mirror.lock
-DEST_LOCKFILE=$LOCK_PATH/zfs-mirror-$DEST.lock
 
 if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
     if [[ -e /usr/gnu/bin/date ]]; then
@@ -294,6 +292,11 @@ function human_readable_size {
     fi
 }
 
+function pool_lockfile {
+    trace $FUNCNAME $@
+    echo $LOCK_PATH/zfs-mirror-$1.lock
+}
+
 function get_lock {
     trace $FUNCNAME $@
     logv "Trying to take lock: $1"
@@ -321,7 +324,7 @@ function release_lock {
 function cleanup {
     trace $FUNCNAME $@
     : $((DEPTH++))
-    release_lock $GLOBAL_LOCKFILE
+    release_lock $SRC_LOCKFILE
     release_lock $DEST_LOCKFILE
     : $((DEPTH--))
     return $1
@@ -661,11 +664,14 @@ if ! dataset_exists $DEST; then
     error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
 fi
 
-# It's worth waiting for the global lock to become available, as it's not
-# typically held for very long
+SRC_LOCKFILE=$(pool_lockfile $SRC)
+DEST_LOCKFILE=$(pool_lockfile $DEST)
+
+# It's worth waiting for the source lock to become available, as it's only held
+# while creating and expiring snapshots, which typically doesn't take very long.
 WAITTIME=0
-while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
-    log "Couldn't get global lock (after $WAITTIME seconds); waiting 10 seconds"
+while [[ -e "$SRC_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
+    log "Couldn't get lock for $SRC (after $WAITTIME seconds); waiting 10 seconds"
     : $((WAITTIME += 10))
     sleep 10
 done
@@ -673,7 +679,7 @@ done
 if $AGE_REPORTING; then
     age_report $DEST
 else
-    if get_lock $GLOBAL_LOCKFILE; then
+    if get_lock $SRC_LOCKFILE; then
         # It's probably not worth waiting for the per-destination lock, since it
         # could be held for a long time (ie. there's a sync in progress)
         if get_lock $DEST_LOCKFILE; then
@@ -702,7 +708,7 @@ else
             else
                 error "No source filesytems defined for destination $DEST" $ERR_NO_SOURCES_DEFINED
             fi
-            release_lock $GLOBAL_LOCKFILE
+            release_lock $SRC_LOCKFILE
 
             # Third task: sync new snapshots
             if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $DEST "xzcat --version"; then
@@ -724,7 +730,7 @@ else
                 fi
             done
             # Fourth task: expire unneeded snapshots on source
-            if get_lock $GLOBAL_LOCKFILE; then
+            if get_lock $SRC_LOCKFILE; then
                 # It's not critical that this done now - for one thing, in all
                 # probability whatever process is holding the lock will do this
                 # snapshot expiration anyway - so don't bother waiting for it to
@@ -738,7 +744,7 @@ else
             exit 1
         fi
     else
-        log "Couldn't get global zfs-mirror lock after $WAITTIME seconds; giving up"
+        log "Couldn't get lock for $SRC after $WAITTIME seconds; giving up"
         exit 1
     fi
 fi # !AGE_REPORTING
