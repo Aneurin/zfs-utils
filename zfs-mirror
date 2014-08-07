@@ -20,7 +20,6 @@ LOCAL_ZPOOL=zpool
 GREP=grep
 HEAD=head
 SSH=ssh
-TRICKLE=trickle
 PV=pv
 
 VERBOSE=0
@@ -56,10 +55,10 @@ fi
 while getopts "b:c:k:nprtvDo:z" opt; do
     case $opt in
         b)
-            if [[ -x $(which $TRICKLE) ]]; then
-                BWLIMIT="$TRICKLE -s -u $OPTARG"
+            if [[ -x $(which $PV) ]]; then
+                BWLIMIT="$PV -qL ${OPTARG}k |"
             else
-                TRICKLE_NOT_FOUND=true
+                PV_NOT_FOUND=true
             fi
             ;;
         c)
@@ -174,12 +173,8 @@ function error {
     exit $status
 }
 
-if [[ -n ${TRICKLE_NOT_FOUND+x} ]]; then
-    error "Bandwidth limiting requires 'trickle', which was not found in \$PATH"
-fi
-
 if [[ -n ${PV_NOT_FOUND+x} ]]; then
-    warn "Progress display requires 'pv', which was not found in \$PATH"
+    warn "Progress display and bandwidth limiting require 'pv', which was not found in \$PATH"
 fi
 
 if [[ -n ${INVALID_COLOUR+x} ]]; then
