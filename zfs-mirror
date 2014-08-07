@@ -29,6 +29,7 @@ BWLIMIT=""
 KEEP_DEST=10
 KEEP_SRC=2
 ZFS_SEND_DEDUP=""
+ZFS_VERBOSE=""
 LOG_TO_STDERR=false
 COLOUR="auto"
 COMPRESS=false
@@ -47,113 +48,7 @@ ERR_NO_SOURCES_DEFINED=66 # No source filesystems are configured for the given d
 ERR_SRC_SNAP_MISSING=67   # The source filesystem doesn't have the counterpart to the destination's latest snapshot
 ERR_COULDNT_SEND=68       # There was a problem synchronising the snapshot from the source to the destination
 
-if [[ -t 2 ]]; then
-    # stderr is a terminal
-    LOG_TO_STDERR=true
-fi
-
-while getopts "b:c:k:nprtvDo:z" opt; do
-    case $opt in
-        b)
-            if [[ -x $(which $PV) ]]; then
-                BWLIMIT="$PV -qL ${OPTARG}k |"
-            else
-                PV_NOT_FOUND=true
-            fi
-            ;;
-        c)
-            COLOUR=$OPTARG
-            ;;
-        k)
-            # Sanity check: don't allow this to be set to less than 1
-            if [[ $OPTARG -ge 1 ]]; then
-                KEEP_DEST=$OPTARG
-            else
-                KEEP_DEST=1
-            fi
-            ;;
-        n)
-            REALLY=0
-            ;;
-        p)
-            if [[ -x $(which $PV) ]]; then
-                PROGRESS=1
-            else
-                PV_NOT_FOUND=true
-                PROGRESS=0
-            fi
-            ;;
-        r)
-            AGE_REPORTING=true
-            ;;
-        t)
-            USE_TEMP_FILE=true
-            ;;
-        v)
-            : $((VERBOSE++))
-            ;;
-        D)
-            ZFS_SEND_DEDUP="-D"
-            ;;
-        o)
-            case $OPTARG in
-                auto)
-                    ;;
-                syslog)
-                    LOG_TO_STDERR=false
-                    ;;
-                tty)
-                    LOG_TO_STDERR=true
-                    ;;
-                *)
-                    INVALID_OUTPUT_DEST=true
-                    ;;
-            esac
-            ;;
-        z)
-            COMPRESS=true
-            ;;
-    esac
-done
-shift $((OPTIND - 1))
-
-case $COLOUR in
-    never)
-        COLOUR=false
-        ;;
-    always)
-        COLOUR=true
-        ;;
-    auto)
-        if $LOG_TO_STDERR && [[ -t 2 ]]; then
-            COLOUR=true
-        else
-            COLOUR=false
-        fi
-        ;;
-    *)
-        INVALID_COLOUR=true
-        if $LOG_TO_STDERR && [[ -t 2 ]]; then
-            COLOUR=true
-        else
-            COLOUR=false
-        fi
-        ;;
-esac
-
-if $COLOUR; then
-    COL_GREEN="\e[32m"
-    COL_GREY="\e[1;30m"
-    COL_YELLOW="\e[1;33m"
-    COL_RED="\e[31m"
-    COL_END="\e[0m"
-else
-    COL_GREEN=""
-    COL_GREY=""
-    COL_YELLOW=""
-    COL_RED=""
-    COL_END=""
-fi
+DEPTH=0 # For indenting trace output
 
 function out {
     if $LOG_TO_STDERR; then
@@ -173,58 +68,6 @@ function error {
     exit $status
 }
 
-if [[ -n ${PV_NOT_FOUND+x} ]]; then
-    warn "Progress display and bandwidth limiting require 'pv', which was not found in \$PATH"
-fi
-
-if [[ -n ${INVALID_COLOUR+x} ]]; then
-    warn "Argument to -c must be 'auto', 'never', or 'always'. Using auto."
-fi
-
-if [[ -n ${INVALID_OUTPUT_DEST+x} ]]; then
-    warn "Argument to -o must be 'auto', 'syslog', or 'tty'. Using auto."
-fi
-for command in $LOCAL_ZFS $LOCAL_ZPOOL $GREP; do
-    if [[ ! -x $(which $command) ]]; then
-        error "'$command' not found"
-    fi
-done
-
-if [[ $# -eq 0 ]]; then
-    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
-fi
-SRC=$1
-DEST=${2:-'localhost:backup'}
-
-ZFS_VERBOSE=""
-if [[ $VERBOSE -ge 4 ]]; then
-    ZFS_VERBOSE="-v"
-fi
-
-if [[ $(id -u) -eq 0 ]]; then
-    LOCK_PATH=/var/run
-else
-    LOCK_PATH=$HOME
-fi
-
-if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
-    if [[ -e /usr/gnu/bin/date ]]; then
-        DATE_COMMAND="/usr/gnu/bin/date"
-    else
-        DATE_COMMAND="date"
-    fi
-    if ! which $DATE_COMMAND > /dev/null 2>&1; then
-        warn "'date' not found; trace output will lack timestamps"
-        DATE=""
-    elif ! $DATE_COMMAND --rfc-3339=ns > /dev/null 2>&1; then
-        warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
-        DATE="$DATE_COMMAND +%Y/%m/%d/%H.%M.%S"
-    else
-        DATE="$DATE_COMMAND --rfc-3339=ns"
-    fi
-fi
-
-DEPTH=0
 function trace {
     if [[ $VERBOSE -ge 3 ]]; then
         printf "[$COL_GREY""Trace:$COL_END] $COL_GREY""[$($DATE)]$COL_END%*s%s\n" $((DEPTH * 4)) " " "$*" | out
@@ -725,6 +568,164 @@ function mirror {
         exit 1
     fi
 }
+
+if [[ -t 2 ]]; then
+    # stderr is a terminal
+    LOG_TO_STDERR=true
+fi
+
+while getopts "b:c:k:nprtvDo:z" opt; do
+    case $opt in
+        b)
+            if [[ -x $(which $PV) ]]; then
+                BWLIMIT="$PV -qL ${OPTARG}k |"
+            else
+                PV_NOT_FOUND=true
+            fi
+            ;;
+        c)
+            COLOUR=$OPTARG
+            ;;
+        k)
+            # Sanity check: don't allow this to be set to less than 1
+            if [[ $OPTARG -ge 1 ]]; then
+                KEEP_DEST=$OPTARG
+            else
+                KEEP_DEST=1
+            fi
+            ;;
+        n)
+            REALLY=0
+            ;;
+        p)
+            if [[ -x $(which $PV) ]]; then
+                PROGRESS=1
+            else
+                PV_NOT_FOUND=true
+                PROGRESS=0
+            fi
+            ;;
+        r)
+            AGE_REPORTING=true
+            ;;
+        t)
+            USE_TEMP_FILE=true
+            ;;
+        v)
+            : $((VERBOSE++))
+            ;;
+        D)
+            ZFS_SEND_DEDUP="-D"
+            ;;
+        o)
+            case $OPTARG in
+                auto)
+                    ;;
+                syslog)
+                    LOG_TO_STDERR=false
+                    ;;
+                tty)
+                    LOG_TO_STDERR=true
+                    ;;
+                *)
+                    INVALID_OUTPUT_DEST=true
+                    ;;
+            esac
+            ;;
+        z)
+            COMPRESS=true
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+case $COLOUR in
+    never)
+        COLOUR=false
+        ;;
+    always)
+        COLOUR=true
+        ;;
+    auto)
+        if $LOG_TO_STDERR && [[ -t 2 ]]; then
+            COLOUR=true
+        else
+            COLOUR=false
+        fi
+        ;;
+    *)
+        INVALID_COLOUR=true
+        if $LOG_TO_STDERR && [[ -t 2 ]]; then
+            COLOUR=true
+        else
+            COLOUR=false
+        fi
+        ;;
+esac
+
+if $COLOUR; then
+    COL_GREEN="\e[32m"
+    COL_GREY="\e[1;30m"
+    COL_YELLOW="\e[1;33m"
+    COL_RED="\e[31m"
+    COL_END="\e[0m"
+else
+    COL_GREEN=""
+    COL_GREY=""
+    COL_YELLOW=""
+    COL_RED=""
+    COL_END=""
+fi
+
+if [[ -n ${PV_NOT_FOUND+x} ]]; then
+    warn "Progress display and bandwidth limiting require 'pv', which was not found in \$PATH"
+fi
+
+if [[ -n ${INVALID_COLOUR+x} ]]; then
+    warn "Argument to -c must be 'auto', 'never', or 'always'. Using auto."
+fi
+
+if [[ -n ${INVALID_OUTPUT_DEST+x} ]]; then
+    warn "Argument to -o must be 'auto', 'syslog', or 'tty'. Using auto."
+fi
+for command in $LOCAL_ZFS $LOCAL_ZPOOL $GREP; do
+    if [[ ! -x $(which $command) ]]; then
+        error "'$command' not found"
+    fi
+done
+
+if [[ $# -eq 0 ]]; then
+    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
+fi
+SRC=$1
+DEST=${2:-'localhost:backup'}
+
+if [[ $VERBOSE -ge 4 ]]; then
+    ZFS_VERBOSE="-v"
+fi
+
+if [[ $(id -u) -eq 0 ]]; then
+    LOCK_PATH=/var/run
+else
+    LOCK_PATH=$HOME
+fi
+
+if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
+    if [[ -e /usr/gnu/bin/date ]]; then
+        DATE_COMMAND="/usr/gnu/bin/date"
+    else
+        DATE_COMMAND="date"
+    fi
+    if ! which $DATE_COMMAND > /dev/null 2>&1; then
+        warn "'date' not found; trace output will lack timestamps"
+        DATE=""
+    elif ! $DATE_COMMAND --rfc-3339=ns > /dev/null 2>&1; then
+        warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
+        DATE="$DATE_COMMAND +%Y/%m/%d/%H.%M.%S"
+    else
+        DATE="$DATE_COMMAND --rfc-3339=ns"
+    fi
+fi
 
 trap 'cleanup $?' INT TERM EXIT
 
