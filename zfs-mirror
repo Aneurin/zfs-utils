@@ -574,6 +574,7 @@ function expire_src_snaps {
 function expire_dest_snaps {
     trace $FUNCNAME $@
     : $((DEPTH++))
+    # $DEST $source_filesystems
     logv "Expiring old snapshots on $1"
     if [[ $(echo -e "foo\nbar"|$HEAD -n -1 2>/dev/null) != "foo" ]]; then
         warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
@@ -603,7 +604,7 @@ function expire_dest_snaps {
         # Strictly this check isn't necessary, but the previous check for this
         # pool's existence used 'zfs' rather than 'zpool', so this serves as a
         # sanity check that 'zpool' is available.
-        warn "Couldn't find pool $DEST"
+        warn "Couldn't find pool ${dest_host}:$dest_pool"
     elif [[ $(echo $cap | cut -d% -f1) -gt $threshold ]]; then
         warn "Destination capacity over $threshold% ($cap) after snapshot expiration"
     fi
