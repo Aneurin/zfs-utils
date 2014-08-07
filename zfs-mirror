@@ -611,6 +611,43 @@ function expire_dest_snaps {
     return 0
 }
 
+function age_report {
+    trace $FUNCNAME $@
+    # $DEST
+    log "Checking for snapshots on $1 older than $(duration $AGE_WARNING_SECONDS):"
+    [ -f $DEST_LOCKFILE ] && log "There appears to be a synchronisation to $1 currently in progress"
+    if ! which $DATE_COMMAND > /dev/null 2>&1; then
+        error "'date' not found; can't check snapshot ages"
+    fi
+    logv "Source filesystems:"
+    local source_filesystems=$(get_source_filesystems $1)
+    local max_name_len=0
+    for fs in $source_filesystems; do
+        if [[ ${#fs} -gt $max_name_len ]]; then
+            max_name_len=${#fs}
+        fi
+    done
+    for fs in $source_filesystems; do
+        local pad_len=$((max_name_len - ${#fs}))
+        local padding=$(printf "%*.s" $pad_len)
+        local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$1/"))
+        local latest_snap=$SNAPSHOT_PREFIX"_"$latest_snap_num
+        if [[ $latest_snap_num -le 0 ]]; then
+            warn "Can't find any snapshots of $fs on $1; either this dataset has never been synchronised, or there was a connection problem"
+            created=0
+        else
+            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$SRC/$1/")@$latest_snap)
+        fi
+        local time_now=$($DATE_COMMAND +%s)
+        local age=$(($time_now - $created))
+        if [[ $age -gt $AGE_WARNING_SECONDS ]]; then
+            warn "Latest snapshot of $fs on $1:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+        else
+            log "Latest snapshot of $fs on $1:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+        fi
+    done
+}
+
 trap 'cleanup $?' INT TERM EXIT
 
 if ! dataset_exists localhost:$SRC; then
@@ -633,38 +670,7 @@ while [[ -e "$GLOBAL_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
 done
 
 if $AGE_REPORTING; then
-    log "Checking for snapshots on $DEST older than $(duration $AGE_WARNING_SECONDS):"
-    [ -f $DEST_LOCKFILE ] && log "There appears to be a synchronisation to $DEST currently in progress"
-    if ! which $DATE_COMMAND > /dev/null 2>&1; then
-        error "'date' not found; can't check snapshot ages"
-    fi
-    logv "Source filesystems:"
-    source_filesystems=$(get_source_filesystems $DEST)
-    max_name_len=0
-    for fs in $source_filesystems; do
-        if [[ ${#fs} -gt $max_name_len ]]; then
-            max_name_len=${#fs}
-        fi
-    done
-    for fs in $source_filesystems; do
-        pad_len=$((max_name_len - ${#fs}))
-        padding=$(printf "%*.s" $pad_len)
-        latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/"))
-        latest_snap=$SNAPSHOT_PREFIX"_"$latest_snap_num
-        if [[ $latest_snap_num -le 0 ]]; then
-            warn "Can't find any snapshots of $fs on $DEST; either this dataset has never been synchronised, or there was a connection problem"
-            created=0
-        else
-            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$SRC/$DEST/")@$latest_snap)
-        fi
-        time_now=$($DATE_COMMAND +%s)
-        age=$(($time_now - $created))
-        if [[ $age -gt $AGE_WARNING_SECONDS ]]; then
-            warn "Latest snapshot of $fs on $DEST:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
-        else
-            log "Latest snapshot of $fs on $DEST:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
-        fi
-    done
+    age_report $DEST
 else
     if get_lock $GLOBAL_LOCKFILE; then
         # It's probably not worth waiting for the per-destination lock, since it
