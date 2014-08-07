@@ -59,24 +59,24 @@ function out {
 }
 
 function warn {
-    echo -e "[$COL_YELLOW""Warn: $COL_END]" "$*" | out
+    echo -e "[${COL_YELLOW}Warn: $COL_END]" "$*" | out
 }
 
 function error {
-    echo -e "[$COL_RED""Error:$COL_END]" "$1" | out
+    echo -e "[${COL_RED}Error:$COL_END]" "$1" | out
     local status=${2:-1}
     exit $status
 }
 
 function trace {
     if [[ $VERBOSE -ge 3 ]]; then
-        printf "[$COL_GREY""Trace:$COL_END] $COL_GREY""[$($DATE)]$COL_END%*s%s\n" $((DEPTH * 4)) " " "$*" | out
+        printf "[${COL_GREY}Trace:$COL_END] ${COL_GREY}[$($DATE)]$COL_END%*s%s\n" $((DEPTH * 4)) " " "$*" | out
     fi
 }
 
 function log {
     if [[ $VERBOSE -ge 1 ]]; then
-        echo -e "[$COL_GREEN""Info: $COL_END]" "$*" | out
+        echo -e "[${COL_GREEN}Info: $COL_END]" "$*" | out
     fi
 }
 
@@ -189,7 +189,7 @@ function get_source_filesystems {
     trace $FUNCNAME $@
     local dest=${1:-""}
     for fs in $($LOCAL_ZFS list -rH -o name $SRC); do
-        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q ""$dest; then
+        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q "$dest"; then
             logv "$fs configured as sync source"
             echo $fs
         fi
@@ -221,7 +221,7 @@ function latest_snapshot {
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | tail -n 1)
+    local latest=$($zfs list -H -d 1 -r -o name -s name -t snapshot $dataset 2>  /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | tail -n 1)
     echo -n ${latest:-0}
     logv "Latest snapshot of $1: ${latest:-0}"
 }
@@ -291,20 +291,20 @@ function zfs_try_send_incr {
     # $4 destination zfs command
     # $5 destination pool
     trace $FUNCNAME $@
-    local pv=$(get_pv_cmd -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3)
-    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
+    local pv=$(get_pv_cmd -i @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3)
+    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
     error_msg=${error_msg%%\\r}
     if [[ $error_msg != "" ]]; then
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
-            log "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error_msg). Retrying:"
-            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
+            log "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg). Retrying:"
+            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
             if [[ $error_msg != "" ]]; then
-                warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error_msg)"
+                warn "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg)"
             else
                 log "Retry successful"
             fi
         else
-            warn "Error sending @"$SNAPSHOT_PREFIX"_$2 $1@"$SNAPSHOT_PREFIX"_$3 ($error_msg)"
+            warn "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg)"
         fi
     fi
     echo $error_msg
@@ -331,7 +331,7 @@ function zfs_send_incr {
     if [[ $error_msg != "" ]]; then
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $4 -gt $(( $3 + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
-            local intervening_snapshots=$($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $1 2> /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n)
+            local intervening_snapshots=$($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $1 2> /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n)
             local prev=$3
             for snapshot in $intervening_snapshots; do
                 if [[ $snapshot -le $prev ]]; then
@@ -356,7 +356,7 @@ function zfs_send_new {
     local dest_host=$(echo $2 | cut -d: -f1)
     local dest_pool=$(echo $2 | cut -d: -f2)
     local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
-    local pv=$(get_pv_cmd $1@"$SNAPSHOT_PREFIX"_$3)
+    local pv=$(get_pv_cmd $1@${SNAPSHOT_PREFIX}_$3)
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
         local dest_zfs_cmd=$LOCAL_ZFS
@@ -370,7 +370,7 @@ function zfs_send_new {
         fi
         local dest_zfs_cmd="$SSH $dest_host zfs"
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@"$SNAPSHOT_PREFIX"_$3 | $pv $dest_zfs receive -ud $dest_pool"
+    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@${SNAPSHOT_PREFIX}_$3 | $pv $dest_zfs receive -ud $dest_pool"
     do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
     : $((DEPTH--))
     return 0
@@ -404,12 +404,12 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
-        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_SRC); do
+        for snap_num in $($LOCAL_ZFS list -H -d 1 -r -o name -s name -t snapshot $fs | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_SRC); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
-                logv "Snapshot unneeded: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
-                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+                logv "Snapshot unneeded: $fs@${SNAPSHOT_PREFIX}_$snap_num"
+                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@${SNAPSHOT_PREFIX}_$snap_num"
             else
-                logv "Snapshot needed: $fs@"$SNAPSHOT_PREFIX"_$snap_num"
+                logv "Snapshot needed: $fs@${SNAPSHOT_PREFIX}_$snap_num"
             fi
         done
     done
@@ -440,8 +440,8 @@ function expire_dest_snaps {
     for srcfs in $@; do
         destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
         logv "Expiring snapshots on $dest_host:$destfs"
-        for snap_num in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @"$SNAPSHOT_PREFIX"_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_DEST); do
-            do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $destfs@"$SNAPSHOT_PREFIX"_$snap_num"
+        for snap_num in $($dest_zfs list -H -d 1 -r -o name -s name -t snapshot $destfs 2>  /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n | $HEAD -n -$KEEP_DEST); do
+            do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $destfs@${SNAPSHOT_PREFIX}_$snap_num"
         done
     done
     local threshold=95
@@ -478,7 +478,7 @@ function age_report {
         local pad_len=$((max_name_len - ${#fs}))
         local padding=$(printf "%*.s" $pad_len)
         local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$1/"))
-        local latest_snap=$SNAPSHOT_PREFIX"_"$latest_snap_num
+        local latest_snap=${SNAPSHOT_PREFIX}_${latest_snap_num}
         if [[ $latest_snap_num -le 0 ]]; then
             warn "Can't find any snapshots of $fs on $1; either this dataset has never been synchronised, or there was a connection problem"
             created=0
@@ -511,7 +511,7 @@ function mirror {
             local source_filesystems=$(get_source_filesystems $dest)
             local new_snapshots=""
             for fs in $source_filesystems; do
-                new_snapshots+=" $fs@"$SNAPSHOT_PREFIX"_$new_snap"
+                new_snapshots+=" $fs@${SNAPSHOT_PREFIX}_$new_snap"
             done
 
             # Second task: create new snapshots
@@ -538,8 +538,8 @@ function mirror {
             for fs in $source_filesystems; do
                 old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
                 if [[ $old_snap -gt 0 ]]; then
-                    if ! dataset_exists localhost:$fs@"$SNAPSHOT_PREFIX"_$old_snap; then
-                        error "Snapshot $fs@"$SNAPSHOT_PREFIX"_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
+                    if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
+                        error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
                     fi
                     zfs_send_incr $fs $dest $old_snap $new_snap
                 else
