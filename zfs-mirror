@@ -292,6 +292,11 @@ function human_readable_size {
     fi
 }
 
+function split {
+    trace $FUNCNAME $@
+    echo $@ | sed 's/,/ /g'
+}
+
 function pool_lockfile {
     trace $FUNCNAME $@
     echo $LOCK_PATH/zfs-mirror-$1.lock
@@ -398,14 +403,9 @@ function snapshot_created {
     logv "Creation time of $1: ${creation}"
 }
 
-function get_destinations {
+function get_dataset_destinations {
     trace $FUNCNAME $@
-    local OLDIFS=$IFS
-    IFS=','
-    for dest in $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1); do
-        echo -n " $dest"
-    done
-    IFS=$OLDIFS
+    split $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1)
 }
 
 function host_has_cmd {
@@ -551,7 +551,7 @@ function expire_src_snaps {
     local latest_snap_num=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
     for fs in $@; do
         local latest_needed_snap_num=$latest_snap_num
-        for dest in $(get_destinations $fs); do
+        for dest in $(get_dataset_destinations $fs); do
             local destfs=$(echo -n "$fs" | sed -e "s/^$SRC/$dest/")
             local latest_snap_on_dest=$(latest_snapshot $destfs)
             if [[ $latest_snap_on_dest == "0" ]]; then
