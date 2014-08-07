@@ -154,7 +154,7 @@ function get_lock {
 
 function have_lock {
     trace $FUNCNAME $@
-    [ -f $1 ] && [ $(cat $1) = $$ ]
+    [[ -f $1 ]] && [[ $(cat $1) = $$ ]]
     return $?
 }
 
@@ -462,7 +462,7 @@ function age_report {
     trace $FUNCNAME $@
     # $DEST
     log "Checking for snapshots on $1 older than $(duration $AGE_WARNING_SECONDS):"
-    [ -f $DEST_LOCKFILE ] && log "There appears to be a synchronisation to $1 currently in progress"
+    [[ -f $DEST_LOCKFILE ]] && log "There appears to be a synchronisation to $1 currently in progress"
     if ! which $DATE_COMMAND > /dev/null 2>&1; then
         error "'date' not found; can't check snapshot ages"
     fi
