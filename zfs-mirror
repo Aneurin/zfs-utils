@@ -734,6 +734,9 @@ if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
     fi
 fi
 
+SRC_LOCKFILE=$(pool_lockfile $SRC)
+DEST_LOCKFILE=$(pool_lockfile $DEST)
+
 trap 'cleanup $?' INT TERM EXIT
 
 if ! dataset_exists localhost:$SRC; then
@@ -745,9 +748,6 @@ fi
 if ! dataset_exists $DEST; then
     error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
 fi
-
-SRC_LOCKFILE=$(pool_lockfile $SRC)
-DEST_LOCKFILE=$(pool_lockfile $DEST)
 
 # It's worth waiting for the source lock to become available, as it's only held
 # while creating and expiring snapshots, which typically doesn't take very long.
