@@ -63,8 +63,9 @@ function warn {
 }
 
 function error {
-    echo -e "[${COL_RED}Error:$COL_END]" "$1" | out
+    local message="$1"
     local status=${2:-1}
+    echo -e "[${COL_RED}Error:$COL_END]" "$message" | out
     exit $status
 }
 
@@ -99,39 +100,42 @@ function do_conditionally {
 
 function duration {
     trace $FUNCNAME $@
+    local seconds="$1"
+    local recursive=${2:-false}
     # Second argument signifies that we are being called recursively, and
     # should not output anything if the remainder is 0.
-    if [[ $1 -eq 0 ]] && ${2:-false}; then
+    if [[ $seconds -eq 0 ]] && $recursive; then
         return 0
-    elif ${2:-false}; then
+    elif $recursive; then
         echo -n " "
     fi
-    if [[ $1 -le 60 ]]; then
-        echo -n "${1}s"
-    elif [[ $1 -le 3600 ]]; then
-        m=$(($1 / 60))
-        echo -n "${m}m$(duration $(($1 - ($m * 60) )) true)"
-    elif [[ $1 -le $((3600 * 24)) ]]; then
-        h=$(($1 / 3600))
-        echo -n "${h}h$(duration $(($1 - ($h * 3600) )) true)"
+    if [[ $seconds -le 60 ]]; then
+        echo -n "${seconds}s"
+    elif [[ $seconds -le 3600 ]]; then
+        m=$(($seconds / 60))
+        echo -n "${m}m$(duration $(($seconds - ($m * 60) )) true)"
+    elif [[ $seconds -le $((3600 * 24)) ]]; then
+        h=$(($seconds / 3600))
+        echo -n "${h}h$(duration $(($seconds - ($h * 3600) )) true)"
     else
-        d=$(($1 / (3600 * 24) ))
-        echo -n "${d}d$(duration $(($1 - ($d * 3600 * 24) )) true)"
+        d=$(($seconds / (3600 * 24) ))
+        echo -n "${d}d$(duration $(($seconds - ($d * 3600 * 24) )) true)"
     fi
 }
 
 function human_readable_size {
     trace $FUNCNAME $@
-    if [[ $1 -eq 0 ]]; then
+    local bytes="$1"
+    if [[ $bytes -eq 0 ]]; then
         echo "0B"
-    elif [[ $1 -lt 1024 ]]; then
-        echo "${1}B"
-    elif [[ $1 -lt $((1024 * 1024)) ]]; then
-        echo "$(($1 / 1024))kB"
-    elif [[ $1 -lt $((1024 * 1024 * 1024)) ]]; then
-        echo "$(($1 / (1024 * 1024) ))MB"
+    elif [[ $bytes -lt 1024 ]]; then
+        echo "${bytes}B"
+    elif [[ $bytes -lt $((1024 * 1024)) ]]; then
+        echo "$(($bytes / 1024))kB"
+    elif [[ $bytes -lt $((1024 * 1024 * 1024)) ]]; then
+        echo "$(($bytes / (1024 * 1024) ))MB"
     else
-        echo $(echo "$1  $((1024 * 1024 * 1024))" | awk '{printf "%.2fGB", $1/$2}')
+        echo "$bytes $((1024 * 1024 * 1024))" | awk '{printf "%.2fGB", $1/$2}'
     fi
 }
 
@@ -142,28 +146,32 @@ function split {
 
 function pool_lockfile {
     trace $FUNCNAME $@
-    echo $LOCK_PATH/zfs-mirror-$1.lock
+    local poolname="$1"
+    echo "$LOCK_PATH/zfs-mirror-$poolname.lock"
 }
 
 function get_lock {
     trace $FUNCNAME $@
-    logv "Trying to take lock: $1"
-    ( set -o noclobber; echo "$$" > "$1") 2> /dev/null
+    local lockfile="$1"
+    logv "Trying to take lock: $lockfile"
+    ( set -o noclobber; echo "$$" > "$lockfile") 2> /dev/null
     return $?
 }
 
 function have_lock {
     trace $FUNCNAME $@
-    [[ -f $1 ]] && [[ $(cat $1) = $$ ]]
+    local lockfile="$1"
+    [[ -f "$lockfile" ]] && [[ $(cat "$lockfile") = $$ ]]
     return $?
 }
 
 function release_lock {
     trace $FUNCNAME $@
     : $((DEPTH++))
-    logv "Releasing lock $1"
-    if have_lock $1; then
-        rm -f $1
+    local lockfile="$1"
+    logv "Releasing lock $lockfile"
+    if have_lock "$lockfile"; then
+        rm -f "$lockfile"
     fi
     : $((DEPTH--))
     return 0
@@ -172,10 +180,11 @@ function release_lock {
 function cleanup {
     trace $FUNCNAME $@
     : $((DEPTH++))
+    local status="$1"
     release_lock $SRC_LOCKFILE
     release_lock $DEST_LOCKFILE
     : $((DEPTH--))
-    return $1
+    return $status
 }
 
 function zfs_supports_multiple_snapshots {
@@ -255,17 +264,19 @@ function snapshot_created {
 
 function get_dataset_destinations {
     trace $FUNCNAME $@
-    split $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $1)
+    local dataset="$1"
+    split $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$dataset")
 }
 
 function host_has_cmd {
     trace $FUNCNAME $@
     local dest_host=$(echo $1 | cut -d: -f1)
+    local cmd="$2"
     if [[ $dest_host == "localhost" ]]; then
-        $2 > /dev/null 2>&1
+        $cmd > /dev/null 2>&1
     else
         logv "Connecting to remote host '$dest_host'"
-        $SSH $dest_host $2 > /dev/null 2>&1
+        $SSH "$dest_host" $cmd > /dev/null 2>&1
     fi
     return $?
 }
@@ -300,26 +311,26 @@ function get_pv_cmd {
 }
 
 function zfs_try_send_incr {
-    # $1 source dataset
-    # $2 source snapshot number
-    # $3 destination snapshot number
-    # $4 destination zfs command
-    # $5 destination pool
     trace $FUNCNAME $@
-    local pv=$(get_pv_cmd @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3)
-    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
+    local dataset="$1"
+    local src_snap_num="$2"
+    local target_snap_num="$3"
+    local dest_zfs="$4"
+    local dest_pool="$5"
+    local pv=$(get_pv_cmd @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num)
+    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
     error_msg=${error_msg%%\\r}
     if [[ $error_msg != "" ]]; then
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
-            log "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg). Retrying:"
-            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 | $pv $4 receive $ZFS_VERBOSE -ud $5 2>&1 || true")
+            log "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg). Retrying:"
+            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP -i @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
             if [[ $error_msg != "" ]]; then
-                warn "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg)"
+                warn "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg)"
             else
                 log "Retry successful"
             fi
         else
-            warn "Error sending @${SNAPSHOT_PREFIX}_$2 $1@${SNAPSHOT_PREFIX}_$3 ($error_msg)"
+            warn "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg)"
         fi
     fi
     echo $error_msg
@@ -328,9 +339,11 @@ function zfs_try_send_incr {
 function zfs_send_incr {
     trace $FUNCNAME $@
     : $((DEPTH++))
-#$fs $DEST $old_snap $new_snap
+    local dataset="$1"
     local dest_host=$(echo $2 | cut -d: -f1)
     local dest_pool=$(echo $2 | cut -d: -f2)
+    local src_snap_num="$3"
+    local target_snap_num="$4"
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
     else
@@ -342,17 +355,17 @@ function zfs_send_incr {
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
     fi
-    local error_msg=$(zfs_try_send_incr $1 $3 $4 "$dest_zfs" "$dest_pool")
+    local error_msg=$(zfs_try_send_incr "$dataset" "$src_snap_num" "$target_snap_num" "$dest_zfs" "$dest_pool")
     if [[ $error_msg != "" ]]; then
-        if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $4 -gt $(( $3 + 1 )) ]]; then
+        if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ "$target_snap_num" -gt $(( "$src_snap_num" + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
-            local intervening_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$1")
-            local prev=$3
-            for snapshot in $intervening_snapshots; do
+            local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
+            local prev="$src_snap_num"
+            for snapshot in $src_snapshots; do
                 if [[ $snapshot -le $prev ]]; then
                     continue
                 fi
-                error_msg=$(zfs_try_send_incr $1 $prev $snapshot "$dest_zfs" "$dest_pool")
+                error_msg=$(zfs_try_send_incr "$dataset" $prev $snapshot "$dest_zfs" "$dest_pool")
                 if [[ $error_msg != "" ]]; then
                     break
                 fi
