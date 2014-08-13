@@ -23,8 +23,8 @@ SSH=ssh
 PV=pv
 
 VERBOSE=0
-REALLY=1
-PROGRESS=0
+REALLY=true
+PROGRESS=false
 BWLIMIT=""
 KEEP_DEST=10
 KEEP_SRC=2
@@ -90,7 +90,7 @@ function logv {
 function do_conditionally {
     trace $FUNCNAME $@
 
-    if [[ $REALLY == 1 ]]; then
+    if $REALLY; then
         log "Running: $@"
         eval $@
     else
@@ -141,7 +141,7 @@ function human_readable_size {
 
 function split {
     trace $FUNCNAME $@
-    echo $@ | sed 's/,/ /g'
+    echo ${@//,/ }
 }
 
 function pool_lockfile {
@@ -283,7 +283,7 @@ function host_has_cmd {
 
 function get_pv_cmd {
     trace $FUNCNAME $@
-    if [[ $REALLY == 1 ]] && [[ $PROGRESS == 1 ]]; then
+    if $REALLY && $PROGRESS; then
         if [[ $# == 1 ]]; then
             local snapshot="$1"
             # Invoking zfs send to get the transfer size can take a few seconds, but
@@ -623,14 +623,14 @@ while getopts "b:c:k:nprtvDo:z" opt; do
             fi
             ;;
         n)
-            REALLY=0
+            REALLY=false
             ;;
         p)
             if [[ -x $(which $PV) ]]; then
-                PROGRESS=1
+                PROGRESS=true
             else
                 PV_NOT_FOUND=true
-                PROGRESS=0
+                PROGRESS=false
             fi
             ;;
         r)
@@ -732,7 +732,7 @@ if [[ $VERBOSE -ge 4 ]]; then
     ZFS_VERBOSE="-v"
 fi
 
-if [[ $(id -u) -eq 0 ]]; then
+if [[ -w "/var/run" ]]; then
     LOCK_PATH=/var/run
 else
     LOCK_PATH=$HOME
