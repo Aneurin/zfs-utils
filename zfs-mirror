@@ -479,8 +479,9 @@ function expire_dest_snaps {
         done
     done
     local threshold=95
-    local cap=$($dest_zpool list -H -o capacity $dest_pool)
-    if [[ ! $? ]]; then
+    local success=true
+    local cap=$($dest_zpool list -H -o capacity $dest_pool) || success=$?
+    if [[ ! $success ]]; then
         # Strictly this check isn't necessary, but the previous check for this
         # pool's existence used 'zfs' rather than 'zpool', so this serves as a
         # sanity check that 'zpool' is available.
@@ -571,15 +572,16 @@ function mirror {
             fi
             for fs in $source_filesystems; do
                 old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                local success=true
                 if [[ $old_snap -gt 0 ]]; then
                     if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
                         error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
                     fi
-                    zfs_send_incr $fs $dest $old_snap $new_snap
+                    zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
                 else
-                    zfs_send_new $fs $dest $new_snap
+                    zfs_send_new $fs $dest $new_snap || success=$?
                 fi
-                if [[ ! $? ]]; then
+                if [[ ! $success ]]; then
                     error "Failed to send $fs@$new_snap to $dest; giving up" $ERR_COULDNT_SEND
                 fi
             done
