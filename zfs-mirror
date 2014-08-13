@@ -38,6 +38,7 @@ XZRECV=""
 USE_TEMP_FILE=false
 AGE_REPORTING=false
 AGE_WARNING_SECONDS=$((60 * 60 * 24))
+LOG_SIZES_TO_FILE=false
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -283,7 +284,7 @@ function host_has_cmd {
 
 function get_pv_cmd {
     trace $FUNCNAME $@
-    if $REALLY && $PROGRESS; then
+    if $REALLY && ($PROGRESS || $LOG_SIZES_TO_FILE); then
         if [[ $# == 1 ]]; then
             local snapshot="$1"
             # Invoking zfs send to get the transfer size can take a few seconds, but
@@ -297,16 +298,21 @@ function get_pv_cmd {
         else
             error "$FUNCNAME must be called with either one or two arguments, of the form 'dataset@snapshot' or '@snapshot1 dataset@snapshot2'"
         fi
-        log "$(human_readable_size $size) to send (estimated)"
-        local pv=""
-        # Don't bother showing progress bar for < 5MB. The inaccuracy in the
-        # estimate will probably be greater than the actual value.
-        if [[ $size -ge 5*1024*1024 ]]; then
-            pv="pv -s $size |"
-        else
-            logv "Not showing progress for transfer estimated as less than 5MB"
+        if $PROGRESS; then
+            log "$(human_readable_size $size) to send (estimated)"
+            local pv=""
+            # Don't bother showing progress bar for < 5MB. The inaccuracy in the
+            # estimate will probably be greater than the actual value.
+            if [[ $size -ge 5*1024*1024 ]]; then
+                pv="pv -s $size |"
+            else
+                logv "Not showing progress for transfer estimated as less than 5MB"
+            fi
+            echo $pv
         fi
-        echo $pv
+        if $LOG_SIZES_TO_FILE; then
+            echo -e "$(date)\t${snapshot1:-"-"}\t${snapshot2:-$snapshot}\t$size\t$(human_readable_size $size)" >> $SIZE_LOG_PATH
+        fi
     fi
 }
 
@@ -602,7 +608,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:k:nprtvDo:z" opt; do
+while getopts "b:c:k:lnprtvDo:z" opt; do
     case $opt in
         b)
             if [[ -x $(which $PV) ]]; then
@@ -621,6 +627,9 @@ while getopts "b:c:k:nprtvDo:z" opt; do
             else
                 KEEP_DEST=1
             fi
+            ;;
+        l)
+            LOG_SIZES_TO_FILE=true
             ;;
         n)
             REALLY=false
@@ -778,6 +787,10 @@ while [[ -e "$SRC_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
     : $((WAITTIME += 10))
     sleep 10
 done
+
+if $LOG_SIZES_TO_FILE; then
+    SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
+fi
 
 if $AGE_REPORTING; then
     age_report $DEST
