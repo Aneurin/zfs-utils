@@ -534,6 +534,14 @@ function mirror {
     trace $FUNCNAME $@
     local src=$1
     local dest=$2
+    # It's worth waiting for the source lock to become available, as it's only held
+    # while creating and expiring snapshots, which typically doesn't take very long.
+    local wait_time=0
+    while [[ -e "$SRC_LOCKFILE" ]] && [[ $wait_time -lt 60 ]]; do
+        log "Couldn't get lock for $SRC (after $wait_time seconds); waiting 10 seconds"
+        : $((wait_time += 10))
+        sleep 10
+    done
     if get_lock $SRC_LOCKFILE; then
         # It's probably not worth waiting for the per-destination lock, since it
         # could be held for a long time (ie. there's a sync in progress)
@@ -561,7 +569,10 @@ function mirror {
                     done
                 fi
             else
-                error "No source filesytems defined for destination $dest" $ERR_NO_SOURCES_DEFINED
+                warn "No source filesytems defined for destination $dest"
+                release_lock $SRC_LOCKFILE
+                release_lock $DEST_LOCKFILE
+                return $ERR_NO_SOURCES_DEFINED
             fi
             release_lock $SRC_LOCKFILE
 
@@ -575,6 +586,8 @@ function mirror {
                 local success=true
                 if [[ $old_snap -gt 0 ]]; then
                     if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
+                        # This implies something is seriously wrong, so bail
+                        # out even if there are other jobs to do.
                         error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
                     fi
                     zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
@@ -582,7 +595,9 @@ function mirror {
                     zfs_send_new $fs $dest $new_snap || success=$?
                 fi
                 if [[ ! $success ]]; then
-                    error "Failed to send $fs@$new_snap to $dest; giving up" $ERR_COULDNT_SEND
+                    release_lock $DEST_LOCKFILE
+                    warn "Failed to send $fs@$new_snap to $dest; giving up"
+                    return $ERR_COULDNT_SEND
                 fi
             done
             # Fourth task: expire unneeded snapshots on source
@@ -592,17 +607,24 @@ function mirror {
                 # snapshot expiration anyway - so don't bother waiting for it to
                 # become available.
                 expire_src_snaps $source_filesystems
+                release_lock $SRC_LOCKFILE
             fi
             # Fifth task: expire unwanted snapshots on dest
             expire_dest_snaps $dest $source_filesystems
-        else
+            release_lock $DEST_LOCKFILE
+        else # We got the source lock, but not the dest lock
+            release_lock $SRC_LOCKFILE
             log "Couldn't get lock for $dest; giving up"
-            exit 1
+            return 1
         fi
     else
-        log "Couldn't get lock for $src after $WAITTIME seconds; giving up"
-        exit 1
+        # Either the source pool lock has been held for a while, or we got
+        # really unlucky and another process grabbed it in between checking for
+        # it, and trying to take it.
+        log "Couldn't get lock for $src after $wait_time seconds; giving up"
+        return 1
     fi
+    return 0
 }
 
 if [[ -t 2 ]]; then
@@ -733,12 +755,6 @@ for command in $LOCAL_ZFS $LOCAL_ZPOOL $GREP; do
     fi
 done
 
-if [[ $# -eq 0 ]]; then
-    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
-fi
-SRC=$1
-DEST=${2:-'localhost:backup'}
-
 if [[ $VERBOSE -ge 4 ]]; then
     ZFS_VERBOSE="-v"
 fi
@@ -766,36 +782,45 @@ if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
     fi
 fi
 
-SRC_LOCKFILE=$(pool_lockfile $SRC)
-DEST_LOCKFILE=$(pool_lockfile $DEST)
-
-trap 'cleanup $?' INT TERM EXIT
+if [[ $# -eq 0 ]]; then
+    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
+fi
+SRC=$1
+DESTS=${2:-'localhost:backup'}
 
 if ! dataset_exists localhost:$SRC; then
     error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
 fi
-if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
-    error "'$SSH' not found"
-fi
-if ! dataset_exists $DEST; then
-    error "Couldn't find pool $DEST" $ERR_DEST_POOL_MISSING
-fi
 
-# It's worth waiting for the source lock to become available, as it's only held
-# while creating and expiring snapshots, which typically doesn't take very long.
-WAITTIME=0
-while [[ -e "$SRC_LOCKFILE" ]] && [[ $WAITTIME -lt 60 ]]; do
-    log "Couldn't get lock for $SRC (after $WAITTIME seconds); waiting 10 seconds"
-    : $((WAITTIME += 10))
-    sleep 10
+SRC_LOCKFILE=$(pool_lockfile $SRC)
+DEST_LOCKFILE=""
+
+trap 'cleanup $?' INT TERM EXIT
+
+for DEST in $(split $DESTS); do
+    DEST_LOCKFILE=$(pool_lockfile $DEST)
+
+    if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+        error "'$SSH' not found"
+    fi
+    if ! dataset_exists $DEST; then
+        warn "Couldn't find pool $DEST"
+        status=$ERR_DEST_POOL_MISSING
+        continue
+    fi
+
+    if $LOG_SIZES_TO_FILE; then
+        # Change the colon to an underscore for ease of transporting to Windows.
+        SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
+    fi
+
+    if $AGE_REPORTING; then
+        age_report $DEST
+    else
+        mirror $SRC $DEST || status=$?
+    fi
 done
 
-if $LOG_SIZES_TO_FILE; then
-    SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
-fi
-
-if $AGE_REPORTING; then
-    age_report $DEST
-else
-    mirror $SRC $DEST
-fi
+# If there were any errors not quite severe enough to terminate the process
+# entirely, $status holds the error code for the *most recent* failure.
+exit ${status:-0}
