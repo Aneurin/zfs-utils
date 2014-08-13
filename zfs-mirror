@@ -198,25 +198,25 @@ function get_source_filesystems {
     trace $FUNCNAME $@
     local dest=${1:-""}
     for fs in $($LOCAL_ZFS list -rH -o name $SRC); do
-        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest $fs | $GREP -q "$dest"; then
+        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
             logv "$fs configured as sync source"
-            echo $fs
+            echo "$fs"
         fi
     done
 }
 
 function dataset_exists {
     trace $FUNCNAME $@
-    local host=$(echo $1 | cut -d: -f1)
-    local dataset=$(echo $1 | cut -d: -f2)
+    local host=$(echo "$1" | cut -d: -f1)
+    local dataset=$(echo "$1" | cut -d: -f2)
     logv "Checking $dataset exists"
-    if [[ $host == "localhost" ]]; then
-        local zfs=$LOCAL_ZFS
+    if [[ "$host" == "localhost" ]]; then
+        local zfs="$LOCAL_ZFS"
     else
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    $zfs list $dataset >/dev/null 2>&1
+    $zfs list "$dataset" >/dev/null 2>&1
     return $?
 }
 
@@ -229,10 +229,10 @@ function snapshot_numbers {
 
 function latest_snapshot {
     trace $FUNCNAME $@
-    local host=$(echo $1 | cut -d: -f1)
-    local dataset=$(echo $1 | cut -d: -f2)
-    if [[ $host == "localhost" ]]; then
-        local zfs=$LOCAL_ZFS
+    local host=$(echo "$1" | cut -d: -f1)
+    local dataset=$(echo "$1" | cut -d: -f2)
+    if [[ "$host" == "localhost" ]]; then
+        local zfs="$LOCAL_ZFS"
     else
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
@@ -244,15 +244,15 @@ function latest_snapshot {
 
 function snapshot_created {
     trace $FUNCNAME $@
-    local host=$(echo $1 | cut -d: -f1)
-    local snapshot=$(echo $1 | cut -d: -f2)
-    if [[ $host == "localhost" ]]; then
-        local zfs=$LOCAL_ZFS
+    local host=$(echo "$1" | cut -d: -f1)
+    local snapshot=$(echo "$1" | cut -d: -f2)
+    if [[ "$host" == "localhost" ]]; then
+        local zfs="$LOCAL_ZFS"
     else
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    local creation=$($zfs get -H -p -o value creation $snapshot 2>  /dev/null)
+    local creation=$($zfs get -H -p -o value creation "$snapshot" 2>  /dev/null)
     case $creation in
         ''|*[!0-9]*) warn "Couldn't get creation time for $snapshot on $host (got $creation); returning 0"
         creation=0
@@ -270,9 +270,9 @@ function get_dataset_destinations {
 
 function host_has_cmd {
     trace $FUNCNAME $@
-    local dest_host=$(echo $1 | cut -d: -f1)
+    local dest_host=$(echo "$1" | cut -d: -f1)
     local cmd="$2"
-    if [[ $dest_host == "localhost" ]]; then
+    if [[ "$dest_host" == "localhost" ]]; then
         $cmd > /dev/null 2>&1
     else
         logv "Connecting to remote host '$dest_host'"
@@ -733,9 +733,9 @@ if [[ $VERBOSE -ge 4 ]]; then
 fi
 
 if [[ -w "/var/run" ]]; then
-    LOCK_PATH=/var/run
+    LOCK_PATH="/var/run"
 else
-    LOCK_PATH=$HOME
+    LOCK_PATH="$HOME"
 fi
 
 if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
