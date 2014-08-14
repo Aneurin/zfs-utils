@@ -197,12 +197,16 @@ function zfs_supports_multiple_snapshots {
 
 function get_source_filesystems {
     trace $FUNCNAME $@
-    local dest=${1:-""}
-    for fs in $($LOCAL_ZFS list -rH -o name $SRC); do
-        if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
-            logv "$fs configured as sync source"
-            echo "$fs"
-        fi
+    local dests=$(split ${1:-".*"})
+    local src_datasets=$($LOCAL_ZFS list -rH -o name $SRC)
+    for fs in $src_datasets; do
+        for dest in $dests; do
+            if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
+                logv "$fs configured as sync source"
+                echo "$fs"
+                break
+            fi
+        done
     done
 }
 
