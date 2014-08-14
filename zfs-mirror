@@ -495,14 +495,15 @@ function expire_dest_snaps {
 
 function age_report {
     trace $FUNCNAME $@
-    # $DEST
-    log "Checking for snapshots on $1 older than $(duration $AGE_WARNING_SECONDS):"
-    [[ -f $DEST_LOCKFILE ]] && log "There appears to be a synchronisation to $1 currently in progress"
+    local src="$1"
+    local dest="$2"
+    log "Checking for snapshots on $dest older than $(duration $AGE_WARNING_SECONDS):"
+    [[ -f $DEST_LOCKFILE ]] && log "There appears to be a synchronisation to $dest currently in progress"
     if ! which $DATE_COMMAND > /dev/null 2>&1; then
         error "'date' not found; can't check snapshot ages"
     fi
     logv "Source filesystems:"
-    local source_filesystems=$(get_source_filesystems $1)
+    local source_filesystems=$(get_source_filesystems $dest)
     local max_name_len=0
     for fs in $source_filesystems; do
         if [[ ${#fs} -gt $max_name_len ]]; then
@@ -512,13 +513,13 @@ function age_report {
     for fs in $source_filesystems; do
         local pad_len=$((max_name_len - ${#fs}))
         local padding=$(printf "%*.s" $pad_len)
-        local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$SRC/$1/"))
+        local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
         local latest_snap=${SNAPSHOT_PREFIX}_${latest_snap_num}
         if [[ $latest_snap_num -le 0 ]]; then
             warn "Can't find any snapshots of $fs on $1; either this dataset has never been synchronised, or there was a connection problem"
             created=0
         else
-            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$SRC/$1/")@$latest_snap)
+            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$src/$dest/")@$latest_snap)
         fi
         local time_now=$($DATE_COMMAND +%s)
         local age=$(($time_now - $created))
@@ -815,7 +816,7 @@ for DEST in $(split $DESTS); do
     fi
 
     if $AGE_REPORTING; then
-        age_report $DEST
+        age_report $SRC $DEST
     else
         mirror $SRC $DEST || status=$?
     fi
