@@ -632,12 +632,49 @@ function mirror {
     return 0
 }
 
+function display_help {
+cat <<EOF
+Usage: zfs-mirror [options] <source pool> [destination pool(s)]
+
+Destination should be specified in the form "hostname:pool[,hostname:pool...]"
+  Default is 'localhost:backup'
+
+Available options:
+  -b <number>
+     Limit send rate to <number>kBps.
+  -c <option>
+     Colour: must be one of 'auto', 'never', 'always'.
+       Default is 'auto': colourise logging if output destination is a terminal.
+  -D Dedup: use deduplicated zfs send streams, as per 'zfs send -D ...'
+  -h Help: display this usage note.
+  -k <number>
+     Keep <number> old snapshots on each destination dataset.
+  -l Log each transfer along with its estimated size in TSV format to
+       "/var/log/zfs-mirror-est-send-sizes-<source>-to-<destination>.log"
+  -n Dry run: don't make any changes, but print the commands that would have
+       been executed.
+  -o <option>
+     Output destination: must be one of 'auto', 'syslog', 'tty'
+       Default is 'auto': log to stderr if it is a terminal, else to syslog.
+  -p Display a progress bar for transfers. The total transfer size is an
+       estimate, so the progress display can be somewhat innacurate; hence,
+       transfers estimated at < 5MB will not show a progress bar.
+  -r Report on the age of existing backups: for each dataset to mirror, produce
+       a warning if the most recent snapshot is older than $(duration $AGE_WARNING_SECONDS)
+  -t Use a temporary file on the destination rather than piping directly from
+       'zfs send' to 'zfs receive'.
+  -v Verbose: May be specified up to four times to increase the output
+       verbosity. By default only warnings and errors are printed.
+  -z Use xz if available to compress transfers.
+EOF
+}
+
 if [[ -t 2 ]]; then
     # stderr is a terminal
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:k:lnprtvDo:z" opt; do
+while getopts "b:c:hk:lnprtvDo:z" opt; do
     case $opt in
         b)
             if [[ -x $(which $PV) ]]; then
@@ -648,6 +685,10 @@ while getopts "b:c:k:lnprtvDo:z" opt; do
             ;;
         c)
             COLOUR=$OPTARG
+            ;;
+        h)
+            display_help
+            exit 0
             ;;
         k)
             # Sanity check: don't allow this to be set to less than 1
