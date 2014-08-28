@@ -48,6 +48,7 @@ ERR_DEST_POOL_MISSING=65  # Destination pool not found
 ERR_NO_SOURCES_DEFINED=66 # No source filesystems are configured for the given destination
 ERR_SRC_SNAP_MISSING=67   # The source filesystem doesn't have the counterpart to the destination's latest snapshot
 ERR_COULDNT_SEND=68       # There was a problem synchronising the snapshot from the source to the destination
+ERR_INVALID_ARGUMENT=69   # Unknown command line argument given
 
 DEPTH=0 # For indenting trace output
 
@@ -742,6 +743,11 @@ while getopts "b:c:hk:lnprtvDo:z" opt; do
         z)
             COMPRESS=true
             ;;
+        *)
+            display_help 1>&2
+            exit $ERR_INVALID_ARGUMENT
+            ;;
+
     esac
 done
 shift $((OPTIND - 1))
@@ -829,7 +835,7 @@ if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
 fi
 
 if [[ $# -eq 0 ]]; then
-    error "You must specify a source pool" $ERR_SRC_POOL_MISSING
+    error "You must specify a source pool\nSee '$0 -h' for more information" $ERR_SRC_POOL_MISSING
 fi
 SRC=$1
 DESTS=${2:-'localhost:backup'}
