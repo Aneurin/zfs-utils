@@ -511,7 +511,7 @@ function age_report {
     trace $FUNCNAME $@
     local src="$1"
     local dest="$2"
-    log "Checking for snapshots on $dest older than $(duration $AGE_WARNING_SECONDS):"
+    log "Checking for snapshots from $src on $dest older than $(duration $AGE_WARNING_SECONDS):"
     [[ -f $DEST_LOCKFILE ]] && log "There appears to be a synchronisation to $dest currently in progress"
     if ! which $DATE_COMMAND > /dev/null 2>&1; then
         error "'date' not found; can't check snapshot ages"
@@ -530,7 +530,7 @@ function age_report {
         local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
         local latest_snap=${SNAPSHOT_PREFIX}_${latest_snap_num}
         if [[ $latest_snap_num -le 0 ]]; then
-            warn "Can't find any snapshots of $fs on $1; either this dataset has never been synchronised, or there was a connection problem"
+            warn "Can't find any snapshots of $fs on $dest; either this dataset has never been synchronised, or there was a connection problem"
             created=0
         else
             created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$src/$dest/")@$latest_snap)
@@ -538,9 +538,9 @@ function age_report {
         local time_now=$($DATE_COMMAND +%s)
         local age=$(($time_now - $created))
         if [[ $age -gt $AGE_WARNING_SECONDS ]]; then
-            warn "Latest snapshot of $fs on $1:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+            warn "Latest snapshot of $fs on $dest:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
         else
-            log "Latest snapshot of $fs on $1:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
+            log "Latest snapshot of $fs on $dest:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
         fi
     done
 }
