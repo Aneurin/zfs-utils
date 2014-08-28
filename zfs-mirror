@@ -211,6 +211,15 @@ function get_source_filesystems {
     done
 }
 
+function get_dest_pools {
+    trace $FUNCNAME $@
+    local sources=$(split ${1:-""})
+    local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume zfs-mirror:dest -r $sources)
+    for dest in $(split $dests); do
+        echo $dest
+    done | sort -u
+}
+
 function dataset_exists {
     trace $FUNCNAME $@
     local host=$(echo "$1" | cut -d: -f1)
@@ -638,7 +647,8 @@ cat <<EOF
 Usage: zfs-mirror [options] <source pool> [destination pool(s)]
 
 Destination should be specified in the form "hostname:pool[,hostname:pool...]"
-  Default is 'localhost:backup'
+  Default is all destinations configured for any datasets on the specified
+  source pool.
 
 Available options:
   -b <number>
@@ -838,11 +848,12 @@ if [[ $# -eq 0 ]]; then
     error "You must specify a source pool\nSee '$0 -h' for more information" $ERR_SRC_POOL_MISSING
 fi
 SRC=$1
-DESTS=${2:-'localhost:backup'}
 
 if ! dataset_exists localhost:$SRC; then
     error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
 fi
+
+DESTS=${2:-$(get_dest_pools $SRC)}
 
 SRC_LOCKFILE=$(pool_lockfile $SRC)
 DEST_LOCKFILE=""
