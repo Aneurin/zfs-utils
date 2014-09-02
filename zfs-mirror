@@ -433,7 +433,7 @@ function expire_src_snaps {
     # the script.
     logv "Expiring old snapshots on $SRC"
     if [[ $(echo -e "foo\nbar"|$HEAD -n -1 2>/dev/null) != "foo" ]]; then
-        warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $1"
+        warn "'$HEAD' doesn't support '-n -XX'; not expiring any snapshots on $SRC"
         return
     fi
     if [[ $KEEP_SRC -gt 1 ]]; then
