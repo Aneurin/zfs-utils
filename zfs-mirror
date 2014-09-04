@@ -942,7 +942,7 @@ for SRC in $(split $SOURCE_POOLS); do
             error "'$SSH' not found"
         fi
         if ! dataset_exists $DEST; then
-            warn "Couldn't find pool $DEST"
+            warn "Couldn't find dest pool $DEST"
             STATUS=$ERR_DEST_POOL_MISSING
             continue
         fi
