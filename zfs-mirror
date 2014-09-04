@@ -11,6 +11,8 @@
 set -o nounset
 set -e
 
+shopt -s extglob
+
 # Ugly perhaps, but this is the simplest way not to have to worry about $PATH on
 # different systems
 PATH=/usr/gnu/bin:/usr/local/bin:/opt/bin:/sbin:/usr/sbin:/bin:/usr/bin:$PATH
@@ -37,7 +39,7 @@ XZSEND=""
 XZRECV=""
 USE_TEMP_FILE=false
 AGE_REPORTING=false
-AGE_WARNING_SECONDS=$((60 * 60 * 24))
+AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
 LOG_SIZES_TO_FILE=false
 
 PROPERTY_PREFIX=zfs-mirror
@@ -123,6 +125,39 @@ function duration {
         d=$(($seconds / (3600 * 24) ))
         echo -n "${d}d$(duration $(($seconds - ($d * 3600 * 24) )) true)"
     fi
+}
+
+function parse_duration {
+    trace $FUNCNAME $@
+    case $1 in
+        +([0-9]))
+            echo $1
+            return 0
+            ;;
+        +([0-9])[dhms])
+            local value=${1%[dhms]}
+            local units=${1:(-1)}
+            case $units in
+                d)
+                    echo $((value * 24 * 60 * 60))
+                    ;;
+                h)
+                    echo $((value * 60 * 60))
+                    ;;
+                m)
+                    echo $((value * 60))
+                    ;;
+                s)
+                    echo $value
+                    ;;
+            esac
+            ;;
+        *)
+            warn "Argument to -a must be a number, optionally suffixed with d, h, m, or s. Using default of $(duration $AGE_WARNING_SECONDS_DEFAULT)"
+            echo $AGE_WARNING_SECONDS_DEFAULT
+            ;;
+    esac
+    return 0
 }
 
 function human_readable_size {
@@ -654,6 +689,10 @@ Destination should be specified in the form "hostname:pool[,hostname:pool...]"
   source pool.
 
 Available options:
+  -a <age>
+     Age report warning threshold: '-r' will warn for snapshots older than <age>.
+       Must be a number, optionally suffixed with d, h, m, or s.
+       Default is $AGE_WARNING_SECONDS_DEFAULT ($(duration $AGE_WARNING_SECONDS_DEFAULT))
   -b <number>
      Limit send rate to <number>kBps.
   -c <option>
@@ -674,7 +713,8 @@ Available options:
        estimate, so the progress display can be somewhat innacurate; hence,
        transfers estimated at < 5MB will not show a progress bar.
   -r Report on the age of existing backups: for each dataset to mirror, produce
-       a warning if the most recent snapshot is older than $(duration $AGE_WARNING_SECONDS)
+       a warning if the most recent snapshot is older than a configurable
+       threshold (see '-a').
   -t Use a temporary file on the destination rather than piping directly from
        'zfs send' to 'zfs receive'.
   -v Verbose: May be specified up to four times to increase the output
@@ -688,8 +728,11 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "b:c:hk:lnprtvDo:z" opt; do
+while getopts "a:b:c:hk:lnprtvDo:z" opt; do
     case $opt in
+        a)
+            AGE_WARNING=$OPTARG
+            ;;
         b)
             if [[ -x $(which $PV) ]]; then
                 BWLIMIT="$PV -qL ${OPTARG}k |"
@@ -848,6 +891,11 @@ if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
 fi
 
 SOURCE_POOLS=${1:-$($LOCAL_ZPOOL list -H -o name)}
+if [[ -n ${AGE_WARNING+x} ]]; then
+    AGE_WARNING_SECONDS=$(parse_duration $AGE_WARNING)
+else
+    AGE_WARNING_SECONDS=$AGE_WARNING_SECONDS_DEFAULT
+fi
 
 for SRC in $(split $SOURCE_POOLS); do
     if ! dataset_exists localhost:$SRC; then
