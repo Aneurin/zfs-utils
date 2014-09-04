@@ -890,19 +890,43 @@ if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
     fi
 fi
 
-SOURCE_POOLS=${1:-$($LOCAL_ZPOOL list -H -o name)}
 if [[ -n ${AGE_WARNING+x} ]]; then
     AGE_WARNING_SECONDS=$(parse_duration $AGE_WARNING)
 else
     AGE_WARNING_SECONDS=$AGE_WARNING_SECONDS_DEFAULT
 fi
 
+case $# in
+    0)
+        SOURCE_POOLS=$($LOCAL_ZPOOL list -H -o name)
+        ;;
+    1)
+        if [[ $1 == *:* ]]; then
+            SOURCE_POOLS=$($LOCAL_ZPOOL list -H -o name)
+            DESTS=$1
+        else
+            SOURCE_POOLS=$1
+        fi
+        ;;
+    2)
+        if [[ $1 != *:* ]] && [[ $2 == *:* ]]; then
+            SOURCE_POOLS=$1
+            DESTS=$2
+        else
+            error "Invalid source/dest pool combination ($1/$2)\nSee '$0 -h' for more information" $ERR_INVALID_ARGUMENT
+        fi
+        ;;
+    *)
+        error "Invalid source/dest pool combination ($*)\nSee '$0 -h' for more information" $ERR_INVALID_ARGUMENT
+        ;;
+esac
+
 for SRC in $(split $SOURCE_POOLS); do
     if ! dataset_exists localhost:$SRC; then
         error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
     fi
 
-    DESTS=${2:-$(get_dest_pools $SRC)}
+    DESTS=${DESTS:-$(get_dest_pools $SRC)}
 
     SRC_LOCKFILE=$(pool_lockfile $SRC)
     DEST_LOCKFILE=""
