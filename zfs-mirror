@@ -547,7 +547,9 @@ function age_report {
     local src="$1"
     local dest="$2"
     log "Checking for snapshots from $src on $dest older than $(duration $AGE_WARNING_SECONDS):"
-    [[ -f $DEST_LOCKFILE ]] && log "There appears to be a synchronisation to $dest currently in progress"
+    if [[ -f $(pool_lockfile $src-to-$dest) ]]; then
+        log "There appears to be a synchronisation from $src to $dest currently in progress"
+    fi
     if ! which $DATE_COMMAND > /dev/null 2>&1; then
         error "'date' not found; can't check snapshot ages"
     fi
@@ -934,7 +936,7 @@ for SRC in $(split $SOURCE_POOLS); do
     trap 'cleanup $?' INT TERM EXIT
 
     for DEST in $(split $DESTS); do
-        DEST_LOCKFILE=$(pool_lockfile $DEST)
+        DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
 
         if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
             error "'$SSH' not found"
