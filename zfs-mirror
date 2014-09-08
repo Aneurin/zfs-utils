@@ -412,7 +412,7 @@ function zfs_send_incr {
     fi
     local error_msg=$(zfs_try_send_incr "$dataset" "$src_snap_num" "$target_snap_num" "$dest_zfs" "$dest_pool")
     if [[ $error_msg != "" ]]; then
-        if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ "$target_snap_num" -gt $(( "$src_snap_num" + 1 )) ]]; then
+        if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $target_snap_num -gt $(( $src_snap_num + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
             local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
             local prev="$src_snap_num"
