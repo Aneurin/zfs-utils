@@ -41,6 +41,7 @@ USE_TEMP_FILE=false
 AGE_REPORTING=false
 AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
 LOG_SIZES_TO_FILE=false
+WAIT_FOR_LOCK=false
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -588,15 +589,26 @@ function mirror {
     local dest=$2
     # It's worth waiting for the source lock to become available, as it's only held
     # while creating and expiring snapshots, which typically doesn't take very long.
+    local wait_start_time=$($DATE_COMMAND +%s)
     local wait_time=0
-    while [[ -e "$SRC_LOCKFILE" ]] && [[ $wait_time -lt 60 ]]; do
-        log "Couldn't get lock for $SRC (after $wait_time seconds); waiting 10 seconds"
-        : $((wait_time += 10))
+    while [[ -e "$SRC_LOCKFILE" ]] && ( [[ $wait_time -lt 60 ]] || $WAIT_FOR_LOCK ); do
+        log "Couldn't get lock for $SRC (after $(duration $wait_time)); waiting 10 seconds"
         sleep 10
+        wait_time=$(($($DATE_COMMAND +%s) - $wait_start_time))
     done
     if get_lock $SRC_LOCKFILE; then
         # It's probably not worth waiting for the per-destination lock, since it
-        # could be held for a long time (ie. there's a sync in progress)
+        # could be held for a long time (ie. there's a sync in progress), so we
+        # only wait if explicitly instructed.
+        if $WAIT_FOR_LOCK; then
+            wait_start_time=$($DATE_COMMAND +%s)
+            wait_time=0
+            while [[ -e "$DEST_LOCKFILE" ]]; do
+                log "Couldn't get lock for $DEST_LOCKFILE (after $(duration $wait_time)); waiting 10 seconds"
+                sleep 10
+                wait_time=$(($($DATE_COMMAND +%s) - $wait_start_time))
+            done
+        fi
         if get_lock $DEST_LOCKFILE; then
             local old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $src)
             local new_snap=$(($old_snap + 1))
@@ -721,6 +733,9 @@ Available options:
        'zfs send' to 'zfs receive'.
   -v Verbose: May be specified up to four times to increase the output
        verbosity. By default only warnings and errors are printed.
+  -w Wait for lock: If unable to lock the source/dest pools, wait indefinitely
+       rather than giving up after 60s. This uses polling, so it is unlikely
+       that multiple waiting processes will proceed in FIFO order.
   -z Use xz if available to compress transfers.
 EOF
 }
@@ -730,7 +745,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:hk:lnprtvDo:z" opt; do
+while getopts "a:b:c:hk:lnprtvDo:wz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -797,6 +812,9 @@ while getopts "a:b:c:hk:lnprtvDo:z" opt; do
                     INVALID_OUTPUT_DEST=true
                     ;;
             esac
+            ;;
+        w)
+            WAIT_FOR_LOCK=true
             ;;
         z)
             COMPRESS=true
@@ -875,21 +893,19 @@ else
     LOCK_PATH="$HOME"
 fi
 
-if [[ $VERBOSE -ge 3 ]] || $AGE_REPORTING; then
-    if [[ -e /usr/gnu/bin/date ]]; then
-        DATE_COMMAND="/usr/gnu/bin/date"
-    else
-        DATE_COMMAND="date"
-    fi
-    if ! which $DATE_COMMAND > /dev/null 2>&1; then
-        warn "'date' not found; trace output will lack timestamps"
-        DATE=""
-    elif ! $DATE_COMMAND --rfc-3339=ns > /dev/null 2>&1; then
-        warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
-        DATE="$DATE_COMMAND +%Y/%m/%d/%H.%M.%S"
-    else
-        DATE="$DATE_COMMAND --rfc-3339=ns"
-    fi
+if [[ -e /usr/gnu/bin/date ]]; then
+    DATE_COMMAND="/usr/gnu/bin/date"
+else
+    DATE_COMMAND="date"
+fi
+if ! which $DATE_COMMAND > /dev/null 2>&1; then
+    error "'date' not found"
+    DATE=""
+elif ! $DATE_COMMAND --rfc-3339=ns > /dev/null 2>&1; then
+    warn "'date' doesn't support '--rfc-3339'; trace timestamps will only have second precision"
+    DATE="$DATE_COMMAND +%Y/%m/%d/%H.%M.%S"
+else
+    DATE="$DATE_COMMAND --rfc-3339=ns"
 fi
 
 if [[ -n ${AGE_WARNING+x} ]]; then
