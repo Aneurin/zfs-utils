@@ -237,7 +237,9 @@ function get_source_filesystems {
     : $((DEPTH++))
     local dests=$(split ${1:-".*"})
     local src_datasets=$($LOCAL_ZFS list -rH -o name $SRC)
+    local fs
     for fs in $src_datasets; do
+        local dest
         for dest in $dests; do
             if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
                 logv "$fs configured as sync source"
@@ -254,6 +256,7 @@ function get_dest_pools {
     : $((DEPTH++))
     local sources=$(split ${1:-""})
     local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume zfs-mirror:dest -r $sources)
+    local dest
     for dest in $(split $dests); do
         echo $dest
     done | sort -u
@@ -421,6 +424,7 @@ function zfs_send_incr {
             warn "Attempting to send intervening snapshots one-by-one:"
             local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
             local prev="$src_snap_num"
+            local snapshot
             for snapshot in $src_snapshots; do
                 if [[ $snapshot -le $prev ]]; then
                     continue
@@ -480,8 +484,10 @@ function expire_src_snaps {
         logv "Not considering the $KEEP_SRC most recent snapshots of each dataset for deletion"
     fi
     local latest_snap_num=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
+    local fs
     for fs in $@; do
         local latest_needed_snap_num=$latest_snap_num
+        local dest
         for dest in $(get_dataset_destinations $fs); do
             local destfs=$(echo -n "$fs" | sed -e "s/^$SRC/$dest/")
             local latest_snap_on_dest=$(latest_snapshot $destfs)
@@ -492,6 +498,7 @@ function expire_src_snaps {
                 latest_needed_snap_num=$latest_snap_on_dest
             fi
         done
+        local snap_num
         for snap_num in $(snapshot_numbers "$LOCAL_ZFS" "$fs" | $HEAD -n -$KEEP_SRC); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@${SNAPSHOT_PREFIX}_$snap_num"
@@ -525,9 +532,11 @@ function expire_dest_snaps {
         local dest_zpool="$SSH $dest_host zpool"
     fi
     shift
+    local srcfs
     for srcfs in $@; do
         destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
         logv "Expiring snapshots on $dest_host:$destfs"
+        local snap_num
         for snap_num in $(snapshot_numbers "$dest_zfs" "$destfs" | $HEAD -n -$KEEP_DEST); do
             do_conditionally "$dest_zfs destroy $ZFS_VERBOSE $destfs@${SNAPSHOT_PREFIX}_$snap_num"
         done
@@ -562,6 +571,7 @@ function age_report {
     logv "Source filesystems:"
     local source_filesystems=$(get_source_filesystems $dest)
     local max_name_len=0
+    local fs
     for fs in $source_filesystems; do
         if [[ ${#fs} -gt $max_name_len ]]; then
             max_name_len=${#fs}
@@ -624,6 +634,7 @@ function mirror {
             logv "Source filesystems:"
             local source_filesystems=$(get_source_filesystems $dest)
             local new_snapshots=""
+            local fs
             for fs in $source_filesystems; do
                 new_snapshots+=" $fs@${SNAPSHOT_PREFIX}_$new_snap"
             done
@@ -635,6 +646,7 @@ function mirror {
                     do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
                 else
                     warn "This version of zfs does not support making multiple snapshots in a single invocation; snapshot creation will not be atomic."
+                    local snap
                     for snap in $new_snapshots; do
                         do_conditionally "$LOCAL_ZFS snapshot $snap"
                     done
