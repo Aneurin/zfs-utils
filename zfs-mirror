@@ -234,6 +234,7 @@ function zfs_supports_multiple_snapshots {
 
 function get_source_filesystems {
     trace $FUNCNAME $@
+    : $((DEPTH++))
     local dests=$(split ${1:-".*"})
     local src_datasets=$($LOCAL_ZFS list -rH -o name $SRC)
     for fs in $src_datasets; do
@@ -245,15 +246,18 @@ function get_source_filesystems {
             fi
         done
     done
+    : $((DEPTH--))
 }
 
 function get_dest_pools {
     trace $FUNCNAME $@
+    : $((DEPTH++))
     local sources=$(split ${1:-""})
     local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume zfs-mirror:dest -r $sources)
     for dest in $(split $dests); do
         echo $dest
     done | sort -u
+    : $((DEPTH--))
 }
 
 function dataset_exists {
@@ -545,6 +549,7 @@ function expire_dest_snaps {
 
 function age_report {
     trace $FUNCNAME $@
+    : $((DEPTH++))
     local src="$1"
     local dest="$2"
     log "Checking for snapshots from $src on $dest older than $(duration $AGE_WARNING_SECONDS):"
@@ -581,10 +586,12 @@ function age_report {
             log "Latest snapshot of $fs on $dest:$padding $latest_snap, created $($DATE_COMMAND -d @$created) ($(duration $age) old)"
         fi
     done
+    : $((DEPTH--))
 }
 
 function mirror {
     trace $FUNCNAME $@
+    : $((DEPTH++))
     local src=$1
     local dest=$2
     # It's worth waiting for the source lock to become available, as it's only held
@@ -636,6 +643,7 @@ function mirror {
                 warn "No source filesytems defined for destination $dest"
                 release_lock $SRC_LOCKFILE
                 release_lock $DEST_LOCKFILE
+                : $((DEPTH--))
                 return $ERR_NO_SOURCES_DEFINED
             fi
             release_lock $SRC_LOCKFILE
@@ -661,6 +669,7 @@ function mirror {
                 if [[ ! $success ]]; then
                     release_lock $DEST_LOCKFILE
                     warn "Failed to send $fs@$new_snap to $dest; giving up"
+                    : $((DEPTH--))
                     return $ERR_COULDNT_SEND
                 fi
             done
@@ -679,6 +688,7 @@ function mirror {
         else # We got the source lock, but not the dest lock
             release_lock $SRC_LOCKFILE
             log "Couldn't get lock for $dest; giving up"
+            : $((DEPTH--))
             return 1
         fi
     else
@@ -686,8 +696,10 @@ function mirror {
         # really unlucky and another process grabbed it in between checking for
         # it, and trying to take it.
         log "Couldn't get lock for $src after $wait_time seconds; giving up"
+        : $((DEPTH--))
         return 1
     fi
+    : $((DEPTH--))
     return 0
 }
 
