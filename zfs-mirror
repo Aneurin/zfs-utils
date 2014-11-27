@@ -255,7 +255,7 @@ function get_dest_pools {
     trace $FUNCNAME $@
     : $((DEPTH++))
     local sources=$(split ${1:-""})
-    local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume zfs-mirror:dest -r $sources)
+    local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume -r zfs-mirror:dest $sources)
     local dest
     for dest in $(split $dests); do
         echo $dest
