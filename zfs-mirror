@@ -631,6 +631,10 @@ function mirror {
         fi
         if get_lock $DEST_LOCKFILE; then
             local old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $src)
+            if [[ $old_snap == '-' ]]; then
+                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=0 $src"
+                old_snap=0
+            fi
             local new_snap=$(($old_snap + 1))
 
             # define what snapshots we want to create
