@@ -42,6 +42,7 @@ AGE_REPORTING=false
 AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
 LOG_SIZES_TO_FILE=false
 WAIT_FOR_LOCK=false
+PROPERTY_SOURCE_LOCAL="-s local"
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -241,7 +242,7 @@ function get_source_filesystems {
     for fs in $src_datasets; do
         local dest
         for dest in $dests; do
-            if $LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
+            if $LOCAL_ZFS get -Hp -o value $PROPERTY_SOURCE_LOCAL $PROPERTY_PREFIX:dest "$fs" | $GREP -q "$dest"; then
                 logv "$fs configured as sync source"
                 echo "$fs"
                 break
@@ -255,7 +256,7 @@ function get_dest_pools {
     trace $FUNCNAME $@
     : $((DEPTH++))
     local sources=$(split ${1:-""})
-    local dests=$($LOCAL_ZFS get -Hp -o value -s local -t filesystem,volume -r zfs-mirror:dest $sources)
+    local dests=$($LOCAL_ZFS get -Hp -o value $PROPERTY_SOURCE_LOCAL -t filesystem,volume -r zfs-mirror:dest $sources)
     local dest
     for dest in $(split $dests); do
         echo $dest
@@ -323,7 +324,7 @@ function snapshot_created {
 function get_dataset_destinations {
     trace $FUNCNAME $@
     local dataset="$1"
-    split $($LOCAL_ZFS get -Hp -o value -s local $PROPERTY_PREFIX:dest "$dataset")
+    split $($LOCAL_ZFS get -Hp -o value $PROPERTY_SOURCE_LOCAL $PROPERTY_PREFIX:dest "$dataset")
 }
 
 function host_has_cmd {
@@ -753,6 +754,8 @@ Available options:
   -R Report on the age of existing backups: for each dataset to mirror, produce
        a warning if the most recent snapshot is older than a configurable
        threshold (see '-a').
+  -r Recursive: Send child datasets if the destination property is inherited,
+       rather than requiring explicit configuration per-dataset.
   -t Use a temporary file on the destination rather than piping directly from
        'zfs send' to 'zfs receive'.
   -v Verbose: May be specified up to four times to increase the output
@@ -769,7 +772,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:hk:lnpRtvDo:wz" opt; do
+while getopts "a:b:c:hk:lnpRrtvDo:wz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -812,6 +815,9 @@ while getopts "a:b:c:hk:lnpRtvDo:wz" opt; do
             ;;
         R)
             AGE_REPORTING=true
+            ;;
+        r)
+            PROPERTY_SOURCE_LOCAL=""
             ;;
         t)
             USE_TEMP_FILE=true
