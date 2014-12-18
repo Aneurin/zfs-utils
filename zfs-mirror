@@ -729,7 +729,7 @@ Destination should be specified in the form "hostname:pool[,hostname:pool...]"
 
 Available options:
   -a <age>
-     Age report warning threshold: '-r' will warn for snapshots older than <age>.
+     Age report warning threshold: '-R' will warn for snapshots older than <age>.
        Must be a number, optionally suffixed with d, h, m, or s.
        Default is $AGE_WARNING_SECONDS_DEFAULT ($(duration $AGE_WARNING_SECONDS_DEFAULT))
   -b <number>
