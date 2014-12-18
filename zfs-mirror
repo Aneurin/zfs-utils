@@ -778,7 +778,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:hk:lnpRrtvDo:wz" opt; do
+while getopts "a:b:c:Dhk:lno:pRrtvwz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -792,6 +792,9 @@ while getopts "a:b:c:hk:lnpRrtvDo:wz" opt; do
             ;;
         c)
             COLOUR=$OPTARG
+            ;;
+        D)
+            ZFS_SEND_DEDUP="-D"
             ;;
         h)
             display_help
@@ -810,6 +813,21 @@ while getopts "a:b:c:hk:lnpRrtvDo:wz" opt; do
             ;;
         n)
             REALLY=false
+            ;;
+        o)
+            case $OPTARG in
+                auto)
+                    ;;
+                syslog)
+                    LOG_TO_STDERR=false
+                    ;;
+                tty)
+                    LOG_TO_STDERR=true
+                    ;;
+                *)
+                    INVALID_OUTPUT_DEST=true
+                    ;;
+            esac
             ;;
         p)
             if [[ -x $(which $PV) ]]; then
@@ -830,24 +848,6 @@ while getopts "a:b:c:hk:lnpRrtvDo:wz" opt; do
             ;;
         v)
             : $((VERBOSE++))
-            ;;
-        D)
-            ZFS_SEND_DEDUP="-D"
-            ;;
-        o)
-            case $OPTARG in
-                auto)
-                    ;;
-                syslog)
-                    LOG_TO_STDERR=false
-                    ;;
-                tty)
-                    LOG_TO_STDERR=true
-                    ;;
-                *)
-                    INVALID_OUTPUT_DEST=true
-                    ;;
-            esac
             ;;
         w)
             WAIT_FOR_LOCK=true
