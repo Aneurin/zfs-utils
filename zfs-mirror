@@ -699,7 +699,7 @@ function mirror {
             release_lock $DEST_LOCKFILE
         else # We got the source lock, but not the dest lock
             release_lock $SRC_LOCKFILE
-            log "Couldn't get lock for $dest; giving up"
+            log "Couldn't get lock for $src to $dest; giving up"
             : $((DEPTH--))
             return 1
         fi
