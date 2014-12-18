@@ -750,7 +750,7 @@ Available options:
   -p Display a progress bar for transfers. The total transfer size is an
        estimate, so the progress display can be somewhat innacurate; hence,
        transfers estimated at < 5MB will not show a progress bar.
-  -r Report on the age of existing backups: for each dataset to mirror, produce
+  -R Report on the age of existing backups: for each dataset to mirror, produce
        a warning if the most recent snapshot is older than a configurable
        threshold (see '-a').
   -t Use a temporary file on the destination rather than piping directly from
@@ -769,7 +769,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:hk:lnprtvDo:wz" opt; do
+while getopts "a:b:c:hk:lnpRtvDo:wz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -810,7 +810,7 @@ while getopts "a:b:c:hk:lnprtvDo:wz" opt; do
                 PROGRESS=false
             fi
             ;;
-        r)
+        R)
             AGE_REPORTING=true
             ;;
         t)
