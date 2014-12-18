@@ -4,6 +4,8 @@
 #
 # For each dataset to synchronise, set the property "zfs-mirror:dest" locally on
 # that dataset, to values of the form "hostname:pool[,hostname:pool...]"
+# (With '-r', the inherited value is used, so it needn't be set locally on each
+# dataset in tha case.)
 #
 # The script will set the property "zfs-mirror:latest" on the root dataset; this
 # shouldn't be manually changed.
