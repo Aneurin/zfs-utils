@@ -674,17 +674,31 @@ function mirror {
                 XZRECV="xzcat \|"
             fi
             for fs in $source_filesystems; do
-                old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                # This can be a long-running process, so it's possible to lose
+                # connectivity part way through. There's a race possible where
+                # 'latest_snapshot' doesn't find anything, so the script thinks
+                # this is a new dataset to send, and then the connection is
+                # restored in time for it to spend ages sending a new snapshot
+                # that can't be received anyway. Checking that the destination
+                # pool exists immediately before checking the dataset in
+                # question does not eliminate that race, but it does
+                # dramatically reduce the chance of hitting it.
                 local success=true
-                if [[ $old_snap -gt 0 ]]; then
-                    if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
-                        # This implies something is seriously wrong, so bail
-                        # out even if there are other jobs to do.
-                        error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
+                if dataset_exists $dest; then
+                    old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                    if [[ $old_snap -gt 0 ]]; then
+                        if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
+                            # This implies something is seriously wrong, so bail
+                            # out even if there are other jobs to do.
+                            error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
+                        fi
+                        zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
+                    else
+                        zfs_send_new $fs $dest $new_snap || success=$?
                     fi
-                    zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
                 else
-                    zfs_send_new $fs $dest $new_snap || success=$?
+                    warn "Couldn't find dest pool $dest. This is probably a connection problem"
+                    success=$ERR_DEST_POOL_MISSING
                 fi
                 if [[ ! $success ]]; then
                     release_lock $DEST_LOCKFILE
