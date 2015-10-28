@@ -46,6 +46,7 @@ LOG_SIZES_TO_FILE=false
 WAIT_FOR_LOCK=false
 PROPERTY_SOURCE_LOCAL="-s local"
 INC_OPT="-i"
+GET_DESTS=false
 
 PROPERTY_PREFIX=zfs-mirror
 SNAPSHOT_PREFIX=zfs-mirror
@@ -603,6 +604,30 @@ function age_report {
     : $((DEPTH--))
 }
 
+function get_dests {
+    trace $FUNCNAME $@
+    : $((DEPTH++))
+    local sources=$(split $@)
+    if [[ $VERBOSE -lt 1 ]]; then
+        VERBOSE=1
+    fi
+    local max_name_len=0
+    local fs
+    for fs in $sources; do
+        if [[ ${#fs} -gt $max_name_len ]]; then
+            max_name_len=${#fs}
+        fi
+    done
+
+    for fs in $sources; do
+        local pad_len=$((max_name_len - ${#fs}))
+        local padding=$(printf "%*.s" $pad_len)
+        local dests=$($LOCAL_ZFS get -t filesystem,volume -H -o value,source $PROPERTY_PREFIX:dest $fs)
+        log "$fs$padding $dests"
+    done
+    : $((DEPTH--))
+}
+
 function mirror {
     trace $FUNCNAME $@
     : $((DEPTH++))
@@ -795,7 +820,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:DhIk:lno:pRrtvwz" opt; do
+while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -812,6 +837,9 @@ while getopts "a:b:c:DhIk:lno:pRrtvwz" opt; do
             ;;
         D)
             ZFS_SEND_DEDUP="-D"
+            ;;
+        g)
+            GET_DESTS=true
             ;;
         h)
             display_help
@@ -972,19 +1000,19 @@ fi
 
 case $# in
     0)
-        SOURCE_POOLS=$($LOCAL_ZPOOL list -H -o name)
+        SOURCES=$($LOCAL_ZPOOL list -H -o name)
         ;;
     1)
         if [[ $1 == *:* ]]; then
-            SOURCE_POOLS=$($LOCAL_ZPOOL list -H -o name)
+            SOURCES=$($LOCAL_ZPOOL list -H -o name)
             DESTS=$1
         else
-            SOURCE_POOLS=$1
+            SOURCES=$1
         fi
         ;;
     2)
         if [[ $1 != *:* ]] && [[ $2 == *:* ]]; then
-            SOURCE_POOLS=$1
+            SOURCES=$1
             DESTS=$2
         else
             error "Invalid source/dest pool combination ($1/$2)\nSee '$0 -h' for more information" $ERR_INVALID_ARGUMENT
@@ -995,42 +1023,46 @@ case $# in
         ;;
 esac
 
-for SRC in $(split $SOURCE_POOLS); do
-    if ! dataset_exists localhost:$SRC; then
-        error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
-    fi
-
-    DESTS=${DESTS:-$(get_dest_pools $SRC)}
-
-    SRC_LOCKFILE=$(pool_lockfile $SRC)
-    DEST_LOCKFILE=""
-
-    trap 'cleanup $?' INT TERM EXIT
-
-    for DEST in $(split $DESTS); do
-        DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
-
-        if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
-            error "'$SSH' not found"
-        fi
-        if ! dataset_exists $DEST; then
-            warn "Couldn't find dest pool $DEST"
-            STATUS=$ERR_DEST_POOL_MISSING
-            continue
+if $GET_DESTS; then
+    get_dests $SOURCES
+else
+    for SRC in $(split $SOURCES); do
+        if ! dataset_exists localhost:$SRC; then
+            error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
         fi
 
-        if $LOG_SIZES_TO_FILE; then
-            # Change the colon to an underscore for ease of transporting to Windows.
-            SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
-        fi
+        DESTS=${DESTS:-$(get_dest_pools $SRC)}
 
-        if $AGE_REPORTING; then
-            age_report $SRC $DEST
-        else
-            mirror $SRC $DEST || STATUS=$?
-        fi
+        SRC_LOCKFILE=$(pool_lockfile $SRC)
+        DEST_LOCKFILE=""
+
+        trap 'cleanup $?' INT TERM EXIT
+
+        for DEST in $(split $DESTS); do
+            DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
+
+            if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+                error "'$SSH' not found"
+            fi
+            if ! dataset_exists $DEST; then
+                warn "Couldn't find dest pool $DEST"
+                STATUS=$ERR_DEST_POOL_MISSING
+                continue
+            fi
+
+            if $LOG_SIZES_TO_FILE; then
+                # Change the colon to an underscore for ease of transporting to Windows.
+                SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
+            fi
+
+            if $AGE_REPORTING; then
+                age_report $SRC $DEST
+            else
+                mirror $SRC $DEST || STATUS=$?
+            fi
+        done
     done
-done
+fi
 
 # If there were any errors not quite severe enough to terminate the process
 # entirely, $STATUS holds the error code for the *most recent* failure.
