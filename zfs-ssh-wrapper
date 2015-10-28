@@ -14,7 +14,13 @@ __zfs_receive_tmpfile()
 {
     local tmpfile=$(mktemp $TMPDIR/__zfs_receive_tmpfile.XXXXXX)
     cat > $tmpfile
-    cat $tmpfile | eval $@
+    local error_msg=$(cat $tmpfile | eval $@ 2>&1)
+    error_msg=${error_msg%%\\r}
+    if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
+        # Just try again. This error happens apparently at random
+        error_msg=$(cat $tmpfile | eval $@ 2>&1)
+    fi
+    echo $error_msg
     rm $tmpfile
 }
 
