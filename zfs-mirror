@@ -625,7 +625,7 @@ function mirror {
             wait_start_time=$($DATE_COMMAND +%s)
             wait_time=0
             while [[ -e "$DEST_LOCKFILE" ]]; do
-                log "Couldn't get lock for $DEST_LOCKFILE (after $(duration $wait_time)); waiting 10 seconds"
+                log "Couldn't get lock for $src to $dest (after $(duration $wait_time)); waiting 10 seconds"
                 sleep 10
                 wait_time=$(($($DATE_COMMAND +%s) - $wait_start_time))
             done
@@ -660,7 +660,7 @@ function mirror {
                     done
                 fi
             else
-                warn "No source filesytems defined for destination $dest"
+                warn "No source filesytems defined on $src for destination $dest"
                 release_lock $SRC_LOCKFILE
                 release_lock $DEST_LOCKFILE
                 : $((DEPTH--))
