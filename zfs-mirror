@@ -890,7 +890,7 @@ while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
             AGE_REPORTING=true
             ;;
         r)
-            PROPERTY_SOURCE_LOCAL=""
+            PROPERTY_SOURCE_LOCAL="-s local,inherited"
             ;;
         t)
             USE_TEMP_FILE=true
