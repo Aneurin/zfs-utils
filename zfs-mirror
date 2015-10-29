@@ -613,6 +613,12 @@ function get_dests {
     if [[ $VERBOSE -lt 1 ]]; then
         VERBOSE=1
     fi
+    local source
+    for source in $sources; do
+        if ! dataset_exists localhost:$source; then
+            error "Couldn't find source dataset '$source'" $ERR_SRC_POOL_MISSING
+        fi
+    done
     local max_name_len=0
     if $RECURSIVE; then
         sources=$($LOCAL_ZFS list -rH -o name $sources)
@@ -1056,7 +1062,7 @@ esac
 
 if $GET_DESTS; then
     if [[ -n ${DESTS:+x} ]]; then
-        error "Destination should not be specified with '-g'"
+        error "Destination should not be specified with '-g'" $ERR_INVALID_ARGUMENT
     fi
     # If no source was specified, list all source datasets
     if [[ $# == 0 ]]; then
