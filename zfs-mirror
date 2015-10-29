@@ -809,6 +809,10 @@ Available options:
      Colour: must be one of 'auto', 'never', 'always'.
        Default is 'auto': colourise logging if output destination is a terminal.
   -D Dedup: use deduplicated zfs send streams, as per 'zfs send -D ...'
+  -g [source dataset(s)]
+     Get the destinations configured for the specified dataset(s), or all
+       configured datasets if none given.
+       May be combined with '-r' to include child datasets.
   -h Help: display this usage note.
   -I Send incremental streams using 'zfs send -I' rather than 'zfs send -i'
        (See 'man zfs' for details.)
