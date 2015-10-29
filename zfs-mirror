@@ -41,6 +41,7 @@ LOG_TO_STDERR=false
 PROGRESS=false
 PROPERTY_SOURCE_LOCAL="-s local"
 REALLY=true
+RECURSIVE=false
 USE_TEMP_FILE=false
 VERBOSE=0
 WAIT_FOR_LOCK=false
@@ -613,6 +614,9 @@ function get_dests {
         VERBOSE=1
     fi
     local max_name_len=0
+    if $RECURSIVE; then
+        sources=$($LOCAL_ZFS list -rH -o name $sources)
+    fi
     local fs
     for fs in $sources; do
         if [[ ${#fs} -gt $max_name_len ]]; then
@@ -620,11 +624,31 @@ function get_dests {
         fi
     done
 
+    local loop_count=0
     for fs in $sources; do
-        local pad_len=$((max_name_len - ${#fs}))
-        local padding=$(printf "%*.s" $pad_len)
-        local dests=$($LOCAL_ZFS get -t filesystem,volume -H -o value,source $PROPERTY_PREFIX:dest $fs)
-        log "$fs$padding $dests"
+        local dests=$($LOCAL_ZFS get -t filesystem,volume -s local -H -o value $PROPERTY_PREFIX:dest $fs)
+        if [[ $dests ]]; then
+            : $((loop_count++))
+            if [[ $loop_count == 1 ]]; then
+                log "Explicitly configured:"
+            fi
+            local pad_len=$((max_name_len - ${#fs}))
+            local padding=$(printf "%*.s" $pad_len)
+            log "$fs$padding $dests"
+        fi
+    done
+    loop_count=0
+    for fs in $sources; do
+        local dests=$($LOCAL_ZFS get -t filesystem,volume -s inherited -H -o value,source $PROPERTY_PREFIX:dest $fs)
+        if [[ $dests ]]; then
+            : $((loop_count++))
+            if [[ $loop_count == 1 ]]; then
+                log "Implicity configured for recursive sends:"
+            fi
+            local pad_len=$((max_name_len - ${#fs}))
+            local padding=$(printf "%*.s" $pad_len)
+            log "$fs$padding $dests"
+        fi
     done
     : $((DEPTH--))
 }
@@ -891,6 +915,7 @@ while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
             ;;
         r)
             PROPERTY_SOURCE_LOCAL="-s local,inherited"
+            RECURSIVE=true
             ;;
         t)
             USE_TEMP_FILE=true
@@ -1026,6 +1051,14 @@ case $# in
 esac
 
 if $GET_DESTS; then
+    if [[ -n ${DESTS:+x} ]]; then
+        error "Destination should not be specified with '-g'"
+    fi
+    # If no source was specified, list all source datasets
+    if [[ $# == 0 ]]; then
+        RECURSIVE=true
+        log "Checking configured destinations for all datasets"
+    fi
     get_dests $SOURCES
 else
     for SRC in $(split $SOURCES); do
