@@ -2,10 +2,10 @@
 
 # Configuration:
 #
-# For each dataset to synchronise, set the property "zfs-mirror:dest" locally on
-# that dataset, to values of the form "hostname:pool[,hostname:pool...]"
-# (With '-r', the inherited value is used, so it needn't be set locally on each
-# dataset in tha case.)
+# For each dataset to synchronise, set the mirror destination using
+# "zfs-mirror -s <dataset[,dataset...]> <hostname:pool[,hostname:pool...]>"
+# (When mirroring with '-r', the inherited value is used, so it needn't be set
+# locally on each dataset in that case.)
 #
 # The script will set the property "zfs-mirror:latest" on the root dataset; this
 # shouldn't be manually changed.
@@ -26,13 +26,13 @@ HEAD=head
 SSH=ssh
 PV=pv
 
+ACTION="mirror"
 AGE_REPORTING=false
 AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
 BWLIMIT=""
 COLOUR="auto"
 COMPRESS=false
 EXPLICIT_SOURCE_AND_DEST=false
-GET_DESTS=false
 INC_OPT="-i"
 KEEP_DEST=10
 KEEP_SRC=2
@@ -659,6 +659,22 @@ function get_dests {
     : $((DEPTH--))
 }
 
+function set_dests {
+    trace $FUNCNAME $@
+    : $((DEPTH++))
+    local source=$1
+    local dest=$2
+    if $RECURSIVE; then
+        local sources=$($LOCAL_ZFS list -rH -o name $source)
+    else
+        local sources=$source
+    fi
+    for source in $sources; do
+        do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:dest=$dest $source"
+    done
+    : $((DEPTH--))
+}
+
 function mirror {
     trace $FUNCNAME $@
     : $((DEPTH++))
@@ -839,6 +855,10 @@ Available options:
        threshold (see '-a').
   -r Recursive: Send child datasets if the destination property is inherited,
        rather than requiring explicit configuration per-dataset.
+  -s Set destination: Configure each given source dataset to use the given
+       destination pool(s) as their mirror target(s). Both source and
+       destination must be specified.
+       May be combined with '-r' to set the destination for child datasets.
   -t Use a temporary file on the destination rather than piping directly from
        'zfs send' to 'zfs receive'.
   -v Verbose: May be specified up to four times to increase the output
@@ -855,7 +875,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
+while getopts "a:b:c:DghIk:lno:pRrstvwz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -874,7 +894,7 @@ while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
             ZFS_SEND_DEDUP="-D"
             ;;
         g)
-            GET_DESTS=true
+            ACTION="get_dests"
             ;;
         h)
             display_help
@@ -926,6 +946,9 @@ while getopts "a:b:c:DghIk:lno:pRrtvwz" opt; do
         r)
             PROPERTY_SOURCE_LOCAL="-s local,inherited"
             RECURSIVE=true
+            ;;
+        s)
+            ACTION="set_dests"
             ;;
         t)
             USE_TEMP_FILE=true
@@ -1060,56 +1083,70 @@ case $# in
         ;;
 esac
 
-if $GET_DESTS; then
-    if [[ -n ${DESTS:+x} ]]; then
-        error "Destination should not be specified with '-g'" $ERR_INVALID_ARGUMENT
-    fi
-    # If no source was specified, list all source datasets
-    if [[ $# == 0 ]]; then
-        RECURSIVE=true
-        log "Checking configured destinations for all datasets"
-    fi
-    get_dests $SOURCES
-else
-    for SRC in $(split $SOURCES); do
-        if ! dataset_exists localhost:$SRC; then
-            error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+case $ACTION in
+    "get_dests")
+        if [[ -n ${DESTS:+x} ]]; then
+            error "Destination should not be specified with '-g'" $ERR_INVALID_ARGUMENT
         fi
-
-        DESTS=${DESTS:-$(get_dest_pools $SRC)}
-
-        SRC_LOCKFILE=$(pool_lockfile $SRC)
-        DEST_LOCKFILE=""
-
-        trap 'cleanup $?' INT TERM EXIT
-
-        for DEST in $(split $DESTS); do
-            DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
-
-            if $EXPLICIT_SOURCE_AND_DEST || [[ $(get_source_filesystems $DEST) != "" ]]; then
-                if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
-                    error "'$SSH' not found"
-                fi
-                if ! dataset_exists $DEST; then
-                    warn "Couldn't find dest pool $DEST"
-                    STATUS=$ERR_DEST_POOL_MISSING
-                    continue
-                fi
-
-                if $LOG_SIZES_TO_FILE; then
-                    # Change the colon to an underscore for ease of transporting to Windows.
-                    SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
-                fi
-
-                if $AGE_REPORTING; then
-                    age_report $SRC $DEST
-                else
-                    mirror $SRC $DEST || STATUS=$?
-                fi
+        # If no source was specified, list all source datasets
+        if [[ $# == 0 ]]; then
+            RECURSIVE=true
+            log "Checking configured destinations for all datasets"
+        fi
+        get_dests $SOURCES
+        ;;
+    "set_dests")
+        if ! $EXPLICIT_SOURCE_AND_DEST; then
+            error "Source and destination must both be specified with '-s'" $ERR_INVALID_ARGUMENT
+        fi
+        for SRC in $(split $SOURCES); do
+            if ! dataset_exists localhost:$SRC; then
+                error "Couldn't find source dataset '$SRC'" $ERR_SRC_POOL_MISSING
             fi
+            set_dests $SRC $DESTS
         done
-    done
-fi
+        ;;
+    "mirror")
+        for SRC in $(split $SOURCES); do
+            if ! dataset_exists localhost:$SRC; then
+                error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
+            fi
+
+            DESTS=${DESTS:-$(get_dest_pools $SRC)}
+
+            SRC_LOCKFILE=$(pool_lockfile $SRC)
+            DEST_LOCKFILE=""
+
+            trap 'cleanup $?' INT TERM EXIT
+
+            for DEST in $(split $DESTS); do
+                DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
+
+                if $EXPLICIT_SOURCE_AND_DEST || [[ $(get_source_filesystems $DEST) != "" ]]; then
+                    if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+                        error "'$SSH' not found"
+                    fi
+                    if ! dataset_exists $DEST; then
+                        warn "Couldn't find dest pool $DEST"
+                        STATUS=$ERR_DEST_POOL_MISSING
+                        continue
+                    fi
+
+                    if $LOG_SIZES_TO_FILE; then
+                        # Change the colon to an underscore for ease of transporting to Windows.
+                        SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
+                    fi
+
+                    if $AGE_REPORTING; then
+                        age_report $SRC $DEST
+                    else
+                        mirror $SRC $DEST || STATUS=$?
+                    fi
+                fi
+            done
+        done
+        ;;
+esac
 
 # If there were any errors not quite severe enough to terminate the process
 # entirely, $STATUS holds the error code for the *most recent* failure.
