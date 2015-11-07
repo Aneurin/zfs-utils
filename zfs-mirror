@@ -26,6 +26,10 @@ HEAD=head
 SSH=ssh
 PV=pv
 
+# Defaults
+PROPERTY_PREFIX=zfs-mirror
+SNAPSHOT_PREFIX=zfs-mirror
+
 ACTION="mirror"
 AGE_REPORTING=false
 AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
@@ -49,9 +53,6 @@ XZRECV=""
 XZSEND=""
 ZFS_SEND_DEDUP=""
 ZFS_VERBOSE=""
-
-PROPERTY_PREFIX=zfs-mirror
-SNAPSHOT_PREFIX=zfs-mirror
 
 ERR_SRC_POOL_MISSING=64   # Source pool not given or not found
 ERR_DEST_POOL_MISSING=65  # Destination pool not found
