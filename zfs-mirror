@@ -400,24 +400,24 @@ function get_pv_cmd {
 function zfs_try_send_incr {
     trace $FUNCNAME $@
     local dataset="$1"
-    local src_snap_num="$2"
-    local target_snap_num="$3"
+    local src_snap="$2"
+    local target_snap="$3"
     local dest_zfs="$4"
     local dest_pool="$5"
-    local pv=$(get_pv_cmd @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num)
-    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
+    local pv=$(get_pv_cmd @$src_snap $dataset@$target_snap)
+    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
     error_msg=${error_msg%%\\r}
     if [[ $error_msg != "" ]]; then
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
-            log "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg). Retrying:"
-            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
+            log "Error sending @$src_snap $dataset@$target_snap ($error_msg). Retrying:"
+            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
             if [[ $error_msg != "" ]]; then
-                warn "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg)"
+                warn "Error sending @$src_snap $dataset@$target_snap ($error_msg)"
             else
                 log "Retry successful"
             fi
         else
-            warn "Error sending @${SNAPSHOT_PREFIX}_$src_snap_num $dataset@${SNAPSHOT_PREFIX}_$target_snap_num ($error_msg)"
+            warn "Error sending @$src_snap $dataset@$target_snap ($error_msg)"
         fi
     fi
     echo $error_msg
@@ -443,7 +443,7 @@ function zfs_send_incr {
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
     fi
-    local error_msg=$(zfs_try_send_incr "$dataset" "$src_snap_num" "$target_snap_num" "$dest_zfs" "$dest_pool_munged")
+    local error_msg=$(zfs_try_send_incr "$dataset" "${SNAPSHOT_PREFIX}_$src_snap_num" "${SNAPSHOT_PREFIX}_$target_snap_num" "$dest_zfs" "$dest_pool_munged")
     if [[ $error_msg != "" ]]; then
         local dest_dataset_name=$(echo -n "$dataset" | sed -e "s/^[^/]\+/$dest_pool/")
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $target_snap_num -gt $(( $src_snap_num + 1 )) ]]; then
@@ -455,7 +455,7 @@ function zfs_send_incr {
                 if [[ $snapshot -le $prev ]]; then
                     continue
                 fi
-                error_msg=$(zfs_try_send_incr "$dataset" $prev $snapshot "$dest_zfs" "$dest_pool_munged")
+                error_msg=$(zfs_try_send_incr "$dataset" ${SNAPSHOT_PREFIX}_$prev ${SNAPSHOT_PREFIX}_$snapshot "$dest_zfs" "$dest_pool_munged")
                 if [[ $error_msg != "" ]]; then
                     break
                 fi
