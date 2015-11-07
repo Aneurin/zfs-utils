@@ -293,6 +293,7 @@ function snapshot_numbers {
     $zfs_cmd list -H -d 1 -r -o name -s name -t snapshot "$dataset" 2>  /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n
 }
 
+# Get the number of the latest zfs-mirror snapshot.
 function latest_snapshot {
     trace $FUNCNAME $@
     local host=$(echo "$1" | cut -d: -f1)
@@ -306,6 +307,21 @@ function latest_snapshot {
     local latest=$(snapshot_numbers "$zfs" "$dataset" | tail -n 1)
     echo -n ${latest:-0}
     logv "Latest snapshot of $1: ${latest:-0}"
+}
+
+# List all snapshots on the given dataset, oldest first, regardless of whether
+# they're zfs-mirror snapshots or not.
+function list_all_snapshots {
+    trace $FUNCNAME $@
+    local host=$(echo "$1" | cut -d: -f1)
+    local dataset=$(echo "$1" | cut -d: -f2)
+    if [[ "$host" == "localhost" ]]; then
+        local zfs="$LOCAL_ZFS"
+    else
+        logv "Connecting to remote host '$host'"
+        local zfs="$SSH $host zfs"
+    fi
+    $zfs list -H -d 1 -r -o name -S creation -t snapshot "$dataset" 2> /dev/null | sed -e "s/.*@//"
 }
 
 function snapshot_created {
@@ -415,19 +431,21 @@ function zfs_send_incr {
     local dest_pool=$(echo $2 | cut -d: -f2)
     local src_snap_num="$3"
     local target_snap_num="$4"
+    local dest_pool_munged="$dest_pool"
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
     else
         logv "Connecting to remote host '$dest_host'"
         if $USE_TEMP_FILE; then
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
-            dest_pool=$dest_pool'"'
+            dest_pool_munged=$dest_pool'"'
         else
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
     fi
-    local error_msg=$(zfs_try_send_incr "$dataset" "$src_snap_num" "$target_snap_num" "$dest_zfs" "$dest_pool")
+    local error_msg=$(zfs_try_send_incr "$dataset" "$src_snap_num" "$target_snap_num" "$dest_zfs" "$dest_pool_munged")
     if [[ $error_msg != "" ]]; then
+        local dest_dataset_name=$(echo -n "$dataset" | sed -e "s/^[^/]\+/$dest_pool/")
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $target_snap_num -gt $(( $src_snap_num + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
             local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
@@ -437,11 +455,37 @@ function zfs_send_incr {
                 if [[ $snapshot -le $prev ]]; then
                     continue
                 fi
-                error_msg=$(zfs_try_send_incr "$dataset" $prev $snapshot "$dest_zfs" "$dest_pool")
+                error_msg=$(zfs_try_send_incr "$dataset" $prev $snapshot "$dest_zfs" "$dest_pool_munged")
                 if [[ $error_msg != "" ]]; then
                     break
                 fi
                 prev=$snapshot
+            done
+        elif [[ $error_msg == "cannot receive incremental stream: destination $dest_dataset_name has been modified"* ]]; then
+            # In the general case there's nothing we can safely do about this,
+            # since it could have been caused by anything. There is one case we
+            # can potentially predict and handle though: if a mirror with the
+            # '-I' option was interrupted, the destination could have
+            # successfully received some intervening snapshots. If this is the
+            # case, and if the source still has the corresponding snapshot, it
+            # might be possible to resume from there.
+            local i=0
+            list_all_snapshots $dest_host:$dest_dataset_name | while read snap; do
+                if [[ $i -eq 0 ]]; then
+                    warn "Newest snapshot of $dest_dataset_name is $snap"
+                    if dataset_exists "localhost:${dataset}@${snap}"; then
+                        warn "Corresponding snapshot exists on $dataset"
+                        break
+                    else
+                        warn "Corresponding snapshot not found on $dataset"
+                    fi
+                else
+                    if dataset_exists "localhost:${dataset}@${snap}"; then
+                        warn "Most recent common snapshot is $snap"
+                        break
+                    fi
+                fi
+                : $((i++))
             done
         fi
     fi
