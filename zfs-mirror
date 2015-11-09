@@ -37,6 +37,7 @@ BWLIMIT=""
 COLOUR="auto"
 COMPRESS=false
 EXPLICIT_SOURCE_AND_DEST=false
+FORCE_INREMENTAL_SEND=false
 INC_OPT="-i"
 KEEP_DEST=10
 KEEP_SRC=2
@@ -404,13 +405,15 @@ function zfs_try_send_incr {
     local target_snap="$3"
     local dest_zfs="$4"
     local dest_pool="$5"
+    local force=${6:-""}
     local pv=$(get_pv_cmd @$src_snap $dataset@$target_snap)
-    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
-    error_msg=${error_msg%%\\r}
+    local error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE $force -ud $dest_pool 2>&1 || true")
+    error_msg=$(echo -n $error_msg)
     if [[ $error_msg != "" ]]; then
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
             log "Error sending @$src_snap $dataset@$target_snap ($error_msg). Retrying:"
-            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE -ud $dest_pool 2>&1 || true")
+            error_msg=$(do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $INC_OPT @$src_snap $dataset@$target_snap 2> /dev/null | $pv $dest_zfs receive $ZFS_VERBOSE $force -ud $dest_pool 2>&1 || true")
+            error_msg=$(echo -n $error_msg)
             if [[ $error_msg != "" ]]; then
                 warn "Error sending @$src_snap $dataset@$target_snap ($error_msg)"
             else
@@ -445,12 +448,12 @@ function zfs_send_incr {
     fi
     local error_msg=$(zfs_try_send_incr "$dataset" "${SNAPSHOT_PREFIX}_$src_snap_num" "${SNAPSHOT_PREFIX}_$target_snap_num" "$dest_zfs" "$dest_pool_munged")
     if [[ $error_msg != "" ]]; then
+        local snapshot
         local dest_dataset_name=$(echo -n "$dataset" | sed -e "s/^[^/]\+/$dest_pool/")
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $target_snap_num -gt $(( $src_snap_num + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
             local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
             local prev="$src_snap_num"
-            local snapshot
             for snapshot in $src_snapshots; do
                 if [[ $snapshot -le $prev ]]; then
                     continue
@@ -470,22 +473,49 @@ function zfs_send_incr {
             # case, and if the source still has the corresponding snapshot, it
             # might be possible to resume from there.
             local i=0
-            list_all_snapshots $dest_host:$dest_dataset_name | while read snap; do
-                if [[ $i -eq 0 ]]; then
-                    warn "Newest snapshot of $dest_dataset_name is $snap"
-                    if dataset_exists "localhost:${dataset}@${snap}"; then
+            list_all_snapshots $dest_host:$dest_dataset_name | while read snapshot; do
+                : $((i++))
+                if [[ $i -eq 1 ]]; then
+                    warn "Newest snapshot of $dest_host:$dest_dataset_name is $snapshot"
+                    if dataset_exists "localhost:${dataset}@${snapshot}"; then
                         warn "Corresponding snapshot exists on $dataset"
-                        break
+                        error_msg=$(zfs_try_send_incr "$dataset" "$snapshot" ${SNAPSHOT_PREFIX}_$target_snap_num "$dest_zfs" "$dest_pool_munged")
+                        if [[ $error_msg == "" ]]; then
+                            log "Retry successful"
+                            break
+                        elif [[ $error_msg != "cannot receive incremental stream: destination $dest_dataset_name has been modified"* ]]; then
+                            # Something else went wrong; time to give up.
+                            break
+                        fi
+                        # At this point, we've tried sending starting at the
+                        # most recent snapshot that exists on the destination,
+                        # and we're still getting "destination has been
+                        # modified", so we fall through to the 'force' case.
                     else
-                        warn "Corresponding snapshot not found on $dataset"
+                        warn "Corresponding snapshot not found on $dataset; looking for older common snapshots"
+                        continue
                     fi
                 else
-                    if dataset_exists "localhost:${dataset}@${snap}"; then
-                        warn "Most recent common snapshot is $snap"
-                        break
+                    if dataset_exists "localhost:${dataset}@${snapshot}"; then
+                        warn "Most recent common snapshot is $snapshot"
+                        # Fall through to 'force'
+                    else
+                        continue
                     fi
                 fi
-                : $((i++))
+                # At this point, we have the most recent common snapshot,
+                # but we can't send it without forcing the receive. This is
+                # because either 1) it's the destination's latest snapshot but
+                # there have been further changes to the destination dataset,
+                # or 2) it's an older snapshot because the destination has
+                # later snapshots that are missing from the source.
+                if $FORCE_INREMENTAL_SEND; then
+                    warn "Forcing $dest_dataset_name to roll back to $snapshot, as requested"
+                    zfs_try_send_incr "$dataset" "$snapshot" ${SNAPSHOT_PREFIX}_$target_snap_num "$dest_zfs" "$dest_pool_munged" "-F"
+                else
+                    warn "Unable to send without forcing a rollback of $dest_host:$dest_dataset_name to $snapshot (try '-f')"
+                fi
+                break
             done
         fi
     fi
@@ -876,6 +906,9 @@ Available options:
      Colour: must be one of 'auto', 'never', 'always'.
        Default is 'auto': colourise logging if output destination is a terminal.
   -D Dedup: use deduplicated zfs send streams, as per 'zfs send -D ...'
+  -f Force: if an incremental mirror fails because the destination dataset has
+       been modified, determine the most recent common snapshot and use 'zfs
+       receive -F' to force the receiving side to roll back to it.
   -g [source dataset(s)]
      Get the destinations configured for the specified dataset(s), or all
        configured datasets if none given.
@@ -920,7 +953,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:DghIk:lno:pRrstvwz" opt; do
+while getopts "a:b:c:DfghIk:lno:pRrstvwz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
@@ -937,6 +970,9 @@ while getopts "a:b:c:DghIk:lno:pRrstvwz" opt; do
             ;;
         D)
             ZFS_SEND_DEDUP="-D"
+            ;;
+        f)
+            FORCE_INREMENTAL_SEND=true
             ;;
         g)
             ACTION="get_dests"
