@@ -724,7 +724,7 @@ function get_dests {
         if [[ $dests ]]; then
             : $((loop_count++))
             if [[ $loop_count == 1 ]]; then
-                log "Implicity configured for recursive sends:"
+                log "Will only be used when mirroring recursively:"
             fi
             local pad_len=$((max_name_len - ${#fs}))
             local padding=$(printf "%*.s" $pad_len)
