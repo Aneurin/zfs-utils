@@ -526,11 +526,12 @@ function zfs_send_incr {
 function zfs_send_new {
     trace $FUNCNAME $@
     : $((DEPTH++))
-#$fs $DEST $new_snap
+    local dataset=$1
     local dest_host=$(echo $2 | cut -d: -f1)
     local dest_pool=$(echo $2 | cut -d: -f2)
-    local destfs=$(echo -n "$1" | sed -e "s/^$SRC/$dest_pool/")
-    local pv=$(get_pv_cmd $1@${SNAPSHOT_PREFIX}_$3)
+    local target_snap_num=$3
+    local dest_pool_munged="$dest_pool"
+    local destfs=$(echo -n "$dataset" | sed -e "s/^$SRC/$dest_pool/")
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
         local dest_zfs_cmd=$LOCAL_ZFS
@@ -538,14 +539,29 @@ function zfs_send_new {
         logv "Connecting to remote host '$dest_host'"
         if $USE_TEMP_FILE; then
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
-            dest_pool=$dest_pool'"'
+            dest_pool_munged=$dest_pool'"'
         else
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
         local dest_zfs_cmd="$SSH $dest_host zfs"
     fi
-    do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $1@${SNAPSHOT_PREFIX}_$3 | $pv $dest_zfs receive -ud $dest_pool"
-    do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
+    if dataset_exists "$dest_host:$destfs"; then
+        warn "Trying to synchronise for the first time, but $dest_host:$destfs already exists."
+        local snapshot=$(list_all_snapshots $dest_host:$destfs | head -n 1)
+        if [[ $snapshot == "" ]]; then
+            warn "No snapshots found on $dest_host:$destfs; giving up."
+        elif dataset_exists "localhost:$dataset@$snapshot"; then
+            warn "Trying to synchronise starting from @$snapshot"
+            zfs_try_send_incr "$dataset" "$snapshot" ${SNAPSHOT_PREFIX}_$target_snap_num "$dest_zfs" "$dest_pool_munged"
+            do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
+        else
+            warn "The most recent snapshot on \"$dest_host:$destfs\" is \"$snapshot\", but the corresponding snapshot was not found on \"$dataset\"; giving up."
+        fi
+    else
+        local pv=$(get_pv_cmd $dataset@${SNAPSHOT_PREFIX}_$target_snap_num)
+        do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive -ud $dest_pool_munged"
+        do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
+    fi
     : $((DEPTH--))
     return 0
 }
