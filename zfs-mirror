@@ -310,7 +310,7 @@ function latest_snapshot {
     logv "Latest snapshot of $1: ${latest:-0}"
 }
 
-# List all snapshots on the given dataset, oldest first, regardless of whether
+# List all snapshots on the given dataset, newest first, regardless of whether
 # they're zfs-mirror snapshots or not.
 function list_all_snapshots {
     trace $FUNCNAME $@
