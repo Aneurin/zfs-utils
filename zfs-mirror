@@ -597,10 +597,16 @@ function expire_src_snaps {
             fi
         done
         local snap_num
+        local error_msg
         for snap_num in $(snapshot_numbers "$LOCAL_ZFS" "$fs" | $HEAD -n -$KEEP_SRC); do
             if [[ $snap_num -lt $latest_needed_snap_num ]]; then
                 logv "Snapshot unneeded: $fs@${SNAPSHOT_PREFIX}_$snap_num"
-                do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@${SNAPSHOT_PREFIX}_$snap_num"
+                error_msg=$(do_conditionally "$LOCAL_ZFS destroy $ZFS_VERBOSE $fs@${SNAPSHOT_PREFIX}_$snap_num 2>&1 || true")
+                if [[ $error_msg == "cannot destroy snapshot $fs@${SNAPSHOT_PREFIX}_$snap_num: dataset is busy" ]]; then
+                    logv $error_msg
+                elif [[ $error_msg != "" ]]; then
+                    warn $error_msg
+                fi
             else
                 logv "Snapshot needed: $fs@${SNAPSHOT_PREFIX}_$snap_num"
             fi
