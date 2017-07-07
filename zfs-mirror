@@ -434,6 +434,7 @@ function zfs_send_incr {
     local dest_pool=$(echo $2 | cut -d: -f2)
     local src_snap_num="$3"
     local target_snap_num="$4"
+    local status=0
     local dest_pool_munged="$dest_pool"
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
@@ -446,7 +447,13 @@ function zfs_send_incr {
             local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
         fi
     fi
-    local error_msg=$(zfs_try_send_incr "$dataset" "${SNAPSHOT_PREFIX}_$src_snap_num" "${SNAPSHOT_PREFIX}_$target_snap_num" "$dest_zfs" "$dest_pool_munged")
+    if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$src_snap_num; then
+        warn "Snapshot $fs@${SNAPSHOT_PREFIX}_$src_snap_num missing from $src"
+        status=$ERR_SRC_SNAP_MISSING
+        local error_msg="ERR_SRC_SNAP_MISSING"
+    else
+        local error_msg=$(zfs_try_send_incr "$dataset" "${SNAPSHOT_PREFIX}_$src_snap_num" "${SNAPSHOT_PREFIX}_$target_snap_num" "$dest_zfs" "$dest_pool_munged")
+    fi
     if [[ $error_msg != "" ]]; then
         local snapshot
         local dest_dataset_name=$(echo -n "$dataset" | sed -e "s/^[^/]\+/$dest_pool/")
@@ -464,14 +471,18 @@ function zfs_send_incr {
                 fi
                 prev=$snapshot
             done
-        elif [[ $error_msg == "cannot receive incremental stream: destination $dest_dataset_name has been modified"* ]]; then
-            # In the general case there's nothing we can safely do about this,
-            # since it could have been caused by anything. There is one case we
-            # can potentially predict and handle though: if a mirror with the
-            # '-I' option was interrupted, the destination could have
-            # successfully received some intervening snapshots. If this is the
-            # case, and if the source still has the corresponding snapshot, it
-            # might be possible to resume from there.
+        elif [[ $error_msg == "cannot receive incremental stream: destination $dest_dataset_name has been modified"* ]] ||
+             [[ $error_msg == "ERR_SRC_SNAP_MISSING" ]]; then
+            # In the general case there's nothing we can safely do about
+            # "destination has been modified", since it could have been caused
+            # by anything. There is one case we can potentially predict and
+            # handle though: if a mirror with the # '-I' option was interrupted,
+            # the destination could have successfully received some intervening
+            # snapshots. If this is the case, and if the source still has the
+            # corresponding snapshot, it might be possible to resume from there.
+            # Alternatively, if we're in a "source snapshot missing" situation,
+            # the best we can do is try to find the latest common snapshot, if
+            # there are any.
             local i=0
             list_all_snapshots $dest_host:$dest_dataset_name | while read snapshot; do
                 : $((i++))
@@ -520,7 +531,7 @@ function zfs_send_incr {
         fi
     fi
     : $((DEPTH--))
-    return 0
+    return $status
 }
 
 function zfs_send_new {
@@ -856,11 +867,6 @@ function mirror {
                 if dataset_exists $dest; then
                     old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
                     if [[ $old_snap -gt 0 ]]; then
-                        if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$old_snap; then
-                            # This implies something is seriously wrong, so bail
-                            # out even if there are other jobs to do.
-                            error "Snapshot $fs@${SNAPSHOT_PREFIX}_$old_snap missing from $src" $ERR_SRC_SNAP_MISSING
-                        fi
                         zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
                     else
                         zfs_send_new $fs $dest $new_snap || success=$?
