@@ -23,7 +23,7 @@ LOCAL_ZFS=zfs
 LOCAL_ZPOOL=zpool
 GREP=grep
 HEAD=head
-SSH=ssh
+SSH="ssh -o ServerAliveInterval=60"
 PV=pv
 
 # Defaults
@@ -1220,7 +1220,7 @@ case $ACTION in
                 DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
 
                 if $EXPLICIT_SOURCE_AND_DEST || [[ $(get_source_filesystems $DEST) != "" ]]; then
-                    if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && [[ ! -x $(which $SSH) ]]; then
+                    if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && ! $SSH -V &>/dev/null; then
                         error "'$SSH' not found"
                     fi
                     if ! dataset_exists $DEST; then
