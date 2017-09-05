@@ -6,9 +6,6 @@
 # "zfs-mirror -s <dataset[,dataset...]> <hostname:pool[,hostname:pool...]>"
 # (When mirroring with '-r', the inherited value is used, so it needn't be set
 # locally on each dataset in that case.)
-#
-# The script will set the property "zfs-mirror:latest" on the root dataset; this
-# shouldn't be manually changed.
 
 set -o nounset
 set -e
@@ -592,10 +589,9 @@ function expire_src_snaps {
     if [[ $KEEP_SRC -gt 1 ]]; then
         logv "Not considering the $KEEP_SRC most recent snapshots of each dataset for deletion"
     fi
-    local latest_snap_num=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $SRC)
     local fs
     for fs in $@; do
-        local latest_needed_snap_num=$latest_snap_num
+        local latest_needed_snap_num=$(latest_snapshot localhost:$fs)
         local dest
         for dest in $(get_dataset_destinations $fs); do
             local destfs=$(echo -n "$fs" | sed -e "s/^$SRC/$dest/")
@@ -811,25 +807,19 @@ function mirror {
             done
         fi
         if get_lock $DEST_LOCKFILE; then
-            local old_snap=$($LOCAL_ZFS get -pH -o value $PROPERTY_PREFIX:latest $src)
-            if [[ $old_snap == '-' ]]; then
-                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=0 $src"
-                old_snap=0
-            fi
-            local new_snap=$(($old_snap + 1))
-
             # define what snapshots we want to create
             logv "Source filesystems:"
             local source_filesystems=$(get_source_filesystems $dest)
             local new_snapshots=""
             local fs
             for fs in $source_filesystems; do
+                local old_snap=$(latest_snapshot localhost:$fs)
+                local new_snap=$(($old_snap + 1))
                 new_snapshots+=" $fs@${SNAPSHOT_PREFIX}_$new_snap"
             done
 
             # Second task: create new snapshots
             if [[ $source_filesystems != "" ]]; then
-                do_conditionally "$LOCAL_ZFS set $PROPERTY_PREFIX:latest=$new_snap $src"
                 if zfs_supports_multiple_snapshots; then
                     do_conditionally "$LOCAL_ZFS snapshot $new_snapshots"
                 else
