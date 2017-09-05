@@ -944,7 +944,7 @@ Available options:
      Output destination: must be one of 'auto', 'syslog', 'tty'
        Default is 'auto': log to stderr if it is a terminal, else to syslog.
   -p Display a progress bar for transfers. The total transfer size is an
-       estimate, so the progress display can be somewhat innacurate; hence,
+       estimate, so the progress display can be somewhat inaccurate; hence,
        transfers estimated at < 5MB will not show a progress bar.
   -R Report on the age of existing backups: for each dataset to mirror, produce
        a warning if the most recent snapshot is older than a configurable
