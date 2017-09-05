@@ -1,8 +1,16 @@
 #!/bin/bash
 
+# This optional script is used on the receiving side to handle receiving
+# snapshots via a temporary file, which allows for retrying failed receives
+# without having to resend the data. It also restricts the commands that can be
+# run, to reduce the risk of errors.
 # NB: This is intended to provide a certain degree of resistance against
 # *accidents*. It can be trivially circumvented and provides no *security*
 # whatsoever.
+
+# To use, save this file to (for example) the receiving user's home directory,
+# and add something like the following to their .ssh/authorised_keys:
+# command="$HOME/zfs-ssh-wrapper",no-pty,no-agent-forwarding,no-port-forwarding ssh-rsa <SSH public key> ZFS backup
 
 set -o nounset
 

@@ -956,7 +956,8 @@ Available options:
        destination must be specified.
        May be combined with '-r' to set the destination for child datasets.
   -t Use a temporary file on the destination rather than piping directly from
-       'zfs send' to 'zfs receive'.
+       'zfs send' to 'zfs receive'. Requires 'zfs-ssh-wrapper' on the
+       destination.
   -v Verbose: May be specified up to four times to increase the output
        verbosity. By default only warnings and errors are printed.
   -w Wait for lock: If unable to lock the source/dest pools, wait indefinitely
