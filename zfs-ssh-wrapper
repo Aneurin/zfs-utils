@@ -16,9 +16,23 @@ __zfs_receive_tmpfile()
     cat > $tmpfile
     local error_msg=$(cat $tmpfile | eval $@ 2>&1)
     error_msg=${error_msg%%\\r}
-    if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]]; then
-        # Just try again. This error happens apparently at random
+    local count=0
+    while [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ count -lt 10 ]]; do
+        sleep $((2 ** $count))
+        : $((count++))
+        # Just try again. This error happens if a snapshot is created while the
+        # stream is being received, or occasionally seemingly at random.
+        logger -t "$0" -- "retrying: $@"
         error_msg=$(cat $tmpfile | eval $@ 2>&1)
+        error_msg=${error_msg%%\\r}
+        if [[ $error_msg == "" ]]; then
+            logger -t "$0" -- "retry successful after $count tries"
+        else
+            logger -t "$0" -- "retry unsuccessful: $error_msg (try $count)"
+        fi
+    done
+    if [[ $error_msg != "" ]] && [[ $error_msg != "cannot receive incremental stream: invalid backup stream" ]]; then
+        logger -t "$0" -- "error: $error_msg"
     fi
     echo $error_msg
     rm $tmpfile
