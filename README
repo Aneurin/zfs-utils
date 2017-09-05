@@ -1,0 +1,104 @@
+This script will check all datasets on a specified pool or pools, and where it
+finds a local property specifying a destination host and pool, will send a
+snapshot of that dataset to the destination. Called repeatedly, it will send
+incremental snapshots optionally including any other snapshots created in the
+interim.
+
+It is safe to call as often as desired, even if a previous instance is already
+running - in that case it will keep trying for a while, then give up and do
+nothing if it can't get a lock.
+
+
+To configure:
+
+    > zfs-mirror -r -s mypool zfs-backup:backup
+
+    Would set every dataset on pool 'mypool' to use pool 'backup' on machine
+    'zfs-backup' as its destination.
+
+    > zfs-mirror -s mypool/dataset zfs-backup:backup,zfs-backup-alternate:backup
+
+    Would set 'mypool/dataset' to use pools named 'backup' on both 'zfs-backup'
+    and 'zfs-backup-alternate' as its destinations.
+
+To run:
+
+    > zfs-mirror
+
+    Would look for any datasets with any destinations configured, and
+    synchronise to them. Any datasets currently being mirrored to the same
+    destination by another version of this script will be skipped. This means it
+    can be run from cron as often as you like, without stacking up endless
+    copies of the script running in parallel.
+
+    > zfs-mirror -I -l -b 2000 mypool zfs-backup-alternate:backup
+
+    Would look for any datasets on 'mypool' which have
+    'zfs-backup-alternate:backup' configured as a destination, and synchronise
+    them at a maximum of 2000kBps, transferring any intermediate snapshots
+    between the ones created by this script (eg manually created or from
+    zfs-auto-snapshot), and saving a log to
+    '/var/log/zfs-mirror-est-send-sizes-mypool-to-zfs-backup-alternate_backup.log'
+
+================================================================================
+
+Usage: zfs-mirror [options] [source pool(s)] [destination pool(s)]
+
+Source should be specified in the form "pool[,pool...]".
+  Default is all pools found on the local system.
+
+Destination should be specified in the form "hostname:pool[,hostname:pool...]"
+  Default is all destinations configured for any datasets on the specified
+  source pool.
+
+Available options:
+  -a <age>
+     Age report warning threshold: '-R' will warn for snapshots older than <age>.
+       Must be a number, optionally suffixed with d, h, m, or s.
+       Default is 86400 (24h)
+  -b <number>
+     Limit send rate to <number>kBps.
+  -c <option>
+     Colour: must be one of 'auto', 'never', 'always'.
+       Default is 'auto': colourise logging if output destination is a terminal.
+  -D Dedup: use deduplicated zfs send streams, as per 'zfs send -D ...'
+  -f Force: if an incremental mirror fails because the destination dataset has
+       been modified, determine the most recent common snapshot and use 'zfs
+       receive -F' to force the receiving side to roll back to it.
+  -g [source dataset(s)]
+     Get the destinations configured for the specified dataset(s), or all
+       configured datasets if none given.
+       May be combined with '-r' to include child datasets.
+  -h Help: display this usage note.
+  -I Send incremental streams using 'zfs send -I' rather than 'zfs send -i'
+       (See 'man zfs' for details.)
+  -k <number>
+     Keep <number> old snapshots on each destination dataset.
+  -l Log each transfer along with its estimated size in TSV format to
+       "/var/log/zfs-mirror-est-send-sizes-<source>-to-<destination>.log"
+  -n Dry run: don't make any changes, but print the commands that would have
+       been executed.
+  -o <option>
+     Output destination: must be one of 'auto', 'syslog', 'tty'
+       Default is 'auto': log to stderr if it is a terminal, else to syslog.
+  -p Display a progress bar for transfers. The total transfer size is an
+       estimate, so the progress display can be somewhat inaccurate; hence,
+       transfers estimated at < 5MB will not show a progress bar.
+  -R Report on the age of existing backups: for each dataset to mirror, produce
+       a warning if the most recent snapshot is older than a configurable
+       threshold (see '-a').
+  -r Recursive: Send child datasets if the destination property is inherited,
+       rather than requiring explicit configuration per-dataset.
+  -s Set destination: Configure each given source dataset to use the given
+       destination pool(s) as their mirror target(s). Both source and
+       destination must be specified.
+       May be combined with '-r' to set the destination for child datasets.
+  -t Use a temporary file on the destination rather than piping directly from
+       'zfs send' to 'zfs receive'. Requires 'zfs-ssh-wrapper' on the
+       destination.
+  -v Verbose: May be specified up to four times to increase the output
+       verbosity. By default only warnings and errors are printed.
+  -w Wait for lock: If unable to lock the source/dest pools, wait indefinitely
+       rather than giving up after 60s. This uses polling, so it is unlikely
+       that multiple waiting processes will proceed in FIFO order.
+  -z Use xz if available to compress transfers.
