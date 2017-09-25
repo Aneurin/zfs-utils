@@ -856,6 +856,7 @@ function mirror {
                 local success=true
                 if dataset_exists $dest; then
                     old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                    new_snap=$(latest_snapshot localhost:$fs)
                     if [[ $old_snap -gt 0 ]]; then
                         zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
                     else
