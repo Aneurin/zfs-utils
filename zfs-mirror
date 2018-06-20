@@ -32,7 +32,7 @@ AGE_REPORTING=false
 AGE_WARNING_SECONDS_DEFAULT=$((60 * 60 * 24))
 BWLIMIT=""
 COLOUR="auto"
-COMPRESS=false
+COMPRESS=""
 EXPLICIT_SOURCE_AND_DEST=false
 FORCE_INREMENTAL_SEND=false
 INC_OPT="-i"
@@ -47,8 +47,8 @@ RECURSIVE=false
 USE_TEMP_FILE=false
 VERBOSE=0
 WAIT_FOR_LOCK=false
-XZRECV=""
-XZSEND=""
+ZRECV=""
+ZSEND=""
 ZFS_SEND_DEDUP=""
 ZFS_VERBOSE=""
 
@@ -438,10 +438,10 @@ function zfs_send_incr {
     else
         logv "Connecting to remote host '$dest_host'"
         if $USE_TEMP_FILE; then
-            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
+            local dest_zfs="$ZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$ZRECV zfs"
             dest_pool_munged=$dest_pool'"'
         else
-            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+            local dest_zfs="$ZSEND $BWLIMIT $SSH $dest_host $ZRECV zfs"
         fi
     fi
     if ! dataset_exists localhost:$fs@${SNAPSHOT_PREFIX}_$src_snap_num; then
@@ -546,10 +546,10 @@ function zfs_send_new {
     else
         logv "Connecting to remote host '$dest_host'"
         if $USE_TEMP_FILE; then
-            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$XZRECV zfs"
+            local dest_zfs="$ZSEND $BWLIMIT $SSH $dest_host __zfs_receive_tmpfile \"$ZRECV zfs"
             dest_pool_munged=$dest_pool'"'
         else
-            local dest_zfs="$XZSEND $BWLIMIT $SSH $dest_host $XZRECV zfs"
+            local dest_zfs="$ZSEND $BWLIMIT $SSH $dest_host $ZRECV zfs"
         fi
         local dest_zfs_cmd="$SSH $dest_host zfs"
     fi
@@ -839,9 +839,12 @@ function mirror {
             release_lock $SRC_LOCKFILE
 
             # Third task: sync new snapshots
-            if $COMPRESS && host_has_cmd localhost "xz --version" && host_has_cmd $dest "xzcat --version"; then
-                XZSEND="xz |"
-                XZRECV="xzcat \|"
+            if [[ $COMPRESS == "g" ]] && host_has_cmd localhost "gzip --version" && host_has_cmd $dest "zcat --version"; then
+                ZSEND="gzip |"
+                ZRECV="zcat \|"
+            elif [[ $COMPRESS == "x" ]] && host_has_cmd localhost "xz --version" && host_has_cmd $dest "xzcat --version"; then
+                ZSEND="xz |"
+                ZRECV="xzcat \|"
             fi
             for fs in $source_filesystems; do
                 # This can be a long-running process, so it's possible to lose
@@ -964,7 +967,8 @@ Available options:
   -w Wait for lock: If unable to lock the source/dest pools, wait indefinitely
        rather than giving up after 60s. This uses polling, so it is unlikely
        that multiple waiting processes will proceed in FIFO order.
-  -z Use xz if available to compress transfers.
+  -x Use xz if available to compress transfers.
+  -z Use gzip if available to compress transfers.
 EOF
 }
 
@@ -1060,8 +1064,11 @@ while getopts "a:b:c:DfghIk:lno:pRrstvwz" opt; do
         w)
             WAIT_FOR_LOCK=true
             ;;
+        x)
+            COMPRESS="x"
+            ;;
         z)
-            COMPRESS=true
+            COMPRESS="g"
             ;;
         *)
             display_help 1>&2

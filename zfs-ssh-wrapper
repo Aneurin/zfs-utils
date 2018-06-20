@@ -53,6 +53,8 @@ if [[ $SSH_ORIGINAL_COMMAND == "zfs list"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zfs set readonly=on"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "xzcat --version" ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "xzcat | zfs receive"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zcat --version" ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zcat | zfs receive"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zpool list"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zpool set canmount=noauto"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "__zfs_receive_tmpfile"* ]]; then
