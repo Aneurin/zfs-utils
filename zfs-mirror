@@ -567,8 +567,25 @@ function zfs_send_new {
         fi
     else
         local pv=$(get_pv_cmd $dataset@${SNAPSHOT_PREFIX}_$target_snap_num)
-        do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive -ud $dest_pool_munged"
-        do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
+        if dataset_exists "$dest_host:$dest_pool" || [[ ${dest_pool} == ${dest_pool%%/*} ]]; then
+            # $dest_pool is a pool, as expected, or it already exists in which
+            # case we don't care
+            do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive -ud $dest_pool_munged"
+            do_conditionally "$dest_zfs_cmd set readonly=on $destfs"
+        else
+            # $dest_pool is actually a dataset, and it doesn't exist, which
+            # means we need to create it before we can send into it. We will
+            # need to use -F to receive the stream which is only safe if we know
+            # that we just *successfully* created it, because otherwise it could
+            # be that we just *think* it doesn't already exist, due to an
+            # intermittent connectivity problem.
+            log "Need to create $dest_pool"
+            if do_conditionally "$dest_zfs_cmd create -o compression=lz4 -o readonly=on -o canmount=noauto \"$dest_pool\""; then
+                do_conditionally "$LOCAL_ZFS send $ZFS_VERBOSE $ZFS_SEND_DEDUP $dataset@${SNAPSHOT_PREFIX}_$target_snap_num | $pv $dest_zfs receive -Fud $dest_pool_munged"
+            else
+                error "Failed to create $dest_pool"
+            fi
+        fi
     fi
     : $((DEPTH--))
     return 0

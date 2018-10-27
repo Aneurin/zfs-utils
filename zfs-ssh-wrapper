@@ -49,6 +49,7 @@ __zfs_receive_tmpfile()
 if [[ $SSH_ORIGINAL_COMMAND == "zfs list"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zfs get"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zfs receive"* ]] ||
+   [[ $SSH_ORIGINAL_COMMAND == "zfs create"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zfs destroy"*@* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "zfs set readonly=on"* ]] ||
    [[ $SSH_ORIGINAL_COMMAND == "xzcat --version" ]] ||
