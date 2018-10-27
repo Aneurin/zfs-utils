@@ -857,7 +857,7 @@ function mirror {
                 # question does not eliminate that race, but it does
                 # dramatically reduce the chance of hitting it.
                 local success=true
-                if dataset_exists $dest; then
+                if dataset_exists ${dest%%/*}; then
                     old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s|^$src|$dest|"))
                     new_snap=$(latest_snapshot localhost:$fs)
                     if [[ $old_snap -gt 0 ]]; then
@@ -866,7 +866,7 @@ function mirror {
                         zfs_send_new $fs $dest $new_snap || success=$?
                     fi
                 else
-                    warn "Couldn't find dest pool $dest. This is probably a connection problem"
+                    warn "Couldn't find dest pool ${dest%%/*}. This is probably a connection problem"
                     success=$ERR_DEST_POOL_MISSING
                 fi
                 if [[ ! $success ]]; then
@@ -1234,8 +1234,8 @@ case $ACTION in
                     if [[ $(echo $DEST | cut -d: -f1) != "localhost" ]] && ! $SSH -V &>/dev/null; then
                         error "'$SSH' not found"
                     fi
-                    if ! dataset_exists $DEST; then
-                        warn "Couldn't find dest pool $DEST"
+                    if ! dataset_exists ${DEST%%/*}; then
+                        warn "Couldn't find dest pool ${DEST%%/*}"
                         STATUS=$ERR_DEST_POOL_MISSING
                         continue
                     fi
