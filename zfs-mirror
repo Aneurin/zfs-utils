@@ -190,7 +190,7 @@ function split {
 
 function pool_lockfile {
     trace $FUNCNAME $@
-    local poolname="$1"
+    local poolname="${1//[ \/]/_}" # Convert spaces/slashes to underscores
     echo "$LOCK_PATH/zfs-mirror-$poolname.lock"
 }
 
@@ -288,7 +288,7 @@ function snapshot_numbers {
     trace $FUNCNAME $@
     local zfs_cmd="$1"
     local dataset="$2"
-    $zfs_cmd list -H -d 1 -r -o name -s name -t snapshot "$dataset" 2>  /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s/.*@$SNAPSHOT_PREFIX\_//" | sort -n
+    $zfs_cmd list -H -d 1 -r -o name -s name -t snapshot "$dataset" 2>  /dev/null | $GREP @${SNAPSHOT_PREFIX}_ | sed -e "s|.*@$SNAPSHOT_PREFIX\_||" | sort -n
 }
 
 # Get the number of the latest zfs-mirror snapshot.
@@ -319,7 +319,7 @@ function list_all_snapshots {
         logv "Connecting to remote host '$host'"
         local zfs="$SSH $host zfs"
     fi
-    $zfs list -H -d 1 -r -o name -S creation -t snapshot "$dataset" 2> /dev/null | sed -e "s/.*@//"
+    $zfs list -H -d 1 -r -o name -S creation -t snapshot "$dataset" 2> /dev/null | sed -e "s|.*@||"
 }
 
 function snapshot_created {
@@ -453,7 +453,7 @@ function zfs_send_incr {
     fi
     if [[ $error_msg != "" ]]; then
         local snapshot
-        local dest_dataset_name=$(echo -n "$dataset" | sed -e "s/^[^/]\+/$dest_pool/")
+        local dest_dataset_name=$(echo -n "$dataset" | sed -e "s|^[^/]\+|$dest_pool|")
         if [[ $error_msg == "cannot receive incremental stream: invalid backup stream" ]] && [[ $target_snap_num -gt $(( $src_snap_num + 1 )) ]]; then
             warn "Attempting to send intervening snapshots one-by-one:"
             local src_snapshots=$(snapshot_numbers "$LOCAL_ZFS" "$dataset")
@@ -539,7 +539,7 @@ function zfs_send_new {
     local dest_pool=$(echo $2 | cut -d: -f2)
     local target_snap_num=$3
     local dest_pool_munged="$dest_pool"
-    local destfs=$(echo -n "$dataset" | sed -e "s/^$SRC/$dest_pool/")
+    local destfs=$(echo -n "$dataset" | sed -e "s|^$SRC|$dest_pool|")
     if [[ $dest_host == "localhost" ]]; then
         local dest_zfs=$LOCAL_ZFS
         local dest_zfs_cmd=$LOCAL_ZFS
@@ -594,7 +594,7 @@ function expire_src_snaps {
         local latest_needed_snap_num=$(latest_snapshot localhost:$fs)
         local dest
         for dest in $(get_dataset_destinations $fs); do
-            local destfs=$(echo -n "$fs" | sed -e "s/^$SRC/$dest/")
+            local destfs=$(echo -n "$fs" | sed -e "s|^$SRC|$dest|")
             local latest_snap_on_dest=$(latest_snapshot $destfs)
             if [[ $latest_snap_on_dest == "0" ]]; then
                 warn "Can't find any snapshots of $fs on $dest; either this dataset has never been synchronised, or there was a connection problem. Not expiring any snapshots."
@@ -645,7 +645,7 @@ function expire_dest_snaps {
     shift
     local srcfs
     for srcfs in $@; do
-        destfs=$(echo -n "$srcfs" | sed -e "s/$SRC/$dest_pool/")
+        destfs=$(echo -n "$srcfs" | sed -e "s|$SRC|$dest_pool|")
         logv "Expiring snapshots on $dest_host:$destfs"
         local snap_num
         for snap_num in $(snapshot_numbers "$dest_zfs" "$destfs" | $HEAD -n -$KEEP_DEST); do
@@ -654,7 +654,7 @@ function expire_dest_snaps {
     done
     local threshold=95
     local success=true
-    local cap=$($dest_zpool list -H -o capacity $dest_pool) || success=$?
+    local cap=$($dest_zpool list -H -o capacity ${dest_pool%%/*}) || success=$?
     if [[ ! $success ]]; then
         # Strictly this check isn't necessary, but the previous check for this
         # pool's existence used 'zfs' rather than 'zpool', so this serves as a
@@ -691,13 +691,13 @@ function age_report {
     for fs in $source_filesystems; do
         local pad_len=$((max_name_len - ${#fs}))
         local padding=$(printf "%*.s" $pad_len)
-        local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+        local latest_snap_num=$(latest_snapshot $(echo -n "$fs" | sed -e "s|^$src|$dest|"))
         local latest_snap=${SNAPSHOT_PREFIX}_${latest_snap_num}
         if [[ $latest_snap_num -le 0 ]]; then
             warn "Can't find any snapshots of $fs on $dest; either this dataset has never been synchronised, or there was a connection problem"
             created=0
         else
-            created=$(snapshot_created $(echo -n "$fs" | sed -e "s/^$src/$dest/")@$latest_snap)
+            created=$(snapshot_created $(echo -n "$fs" | sed -e "s|^$src|$dest|")@$latest_snap)
         fi
         local time_now=$($DATE_COMMAND +%s)
         local age=$(($time_now - $created))
@@ -858,7 +858,7 @@ function mirror {
                 # dramatically reduce the chance of hitting it.
                 local success=true
                 if dataset_exists $dest; then
-                    old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s/^$src/$dest/"))
+                    old_snap=$(latest_snapshot $(echo -n "$fs" | sed -e "s|^$src|$dest|"))
                     new_snap=$(latest_snapshot localhost:$fs)
                     if [[ $old_snap -gt 0 ]]; then
                         zfs_send_incr $fs $dest $old_snap $new_snap || success=$?
@@ -1242,7 +1242,9 @@ case $ACTION in
 
                     if $LOG_SIZES_TO_FILE; then
                         # Change the colon to an underscore for ease of transporting to Windows.
-                        SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//:/_}.log"
+                        # Also change space and slash to underscore in case the destination is a
+                        # dataset rather than a pool
+                        SIZE_LOG_PATH="/var/log/zfs-mirror-est-send-sizes-${SRC}-to-${DEST//[: \/]/_}.log"
                     fi
 
                     if $AGE_REPORTING; then
