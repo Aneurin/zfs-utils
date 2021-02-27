@@ -994,7 +994,7 @@ if [[ -t 2 ]]; then
     LOG_TO_STDERR=true
 fi
 
-while getopts "a:b:c:DfghIk:lno:pRrstvwz" opt; do
+while getopts "a:b:c:DfghIk:lno:pRrstvwxz" opt; do
     case $opt in
         a)
             AGE_WARNING=$OPTARG
