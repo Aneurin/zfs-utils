@@ -1237,14 +1237,14 @@ case $ACTION in
                 error "Couldn't find source pool '$SRC'" $ERR_SRC_POOL_MISSING
             fi
 
-            DESTS=${DESTS:-$(get_dest_pools $SRC)}
+            DESTS_FOR_CURRENT_SRC=${DESTS:-$(get_dest_pools $SRC)}
 
             SRC_LOCKFILE=$(pool_lockfile $SRC)
             DEST_LOCKFILE=""
 
             trap 'cleanup $?' INT TERM EXIT
 
-            for DEST in $(split $DESTS); do
+            for DEST in $(split $DESTS_FOR_CURRENT_SRC); do
                 DEST_LOCKFILE=$(pool_lockfile $SRC-to-$DEST)
 
                 if $EXPLICIT_SOURCE_AND_DEST || [[ $(get_source_filesystems $DEST) != "" ]]; then
