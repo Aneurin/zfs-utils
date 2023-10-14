@@ -37,12 +37,12 @@ for label in labels.keys():
 results['Other'] = collections.OrderedDict([('Total', 0)])
 results['Total'] = collections.OrderedDict([('Total', 0)])
 
-datasets = Command("sudo zfs list -o name -H".split()).lines()
+datasets = Command("zfs list -o name -H".split()).lines()
 
 col_width = 0
 for dataset in datasets:
     col_width = max(col_width, len(dataset))
-    list_cmd = "sudo zfs list -t snapshot -o name -s name -d 1 -H -r".split()
+    list_cmd = "zfs list -t snapshot -o name -s name -d 1 -H -r".split()
     list_cmd.append(dataset)
     cmd = Command(list_cmd)
     snapshots = cmd.lines()
