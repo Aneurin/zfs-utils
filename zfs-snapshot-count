@@ -28,6 +28,7 @@ labels = collections.OrderedDict([
     ('Hourly', '@zfs-auto-snap_hourly-'),
     ('Frequent', '@zfs-auto-snap_frequent-'),
     ('Mirror', '@zfs-mirror_'),
+    ('ZSys', '@autozsys_'),
 ])
 
 results = collections.OrderedDict()
