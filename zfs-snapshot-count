@@ -1,8 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import sys
 import subprocess
-import collections
 import re
 
 
@@ -19,23 +18,23 @@ class Command(object):
     def lines(self):
         if self.stdout is None:
             self.run()
-        return self.stdout.strip().splitlines()
+        return self.stdout.decode().strip().splitlines()
 
-labels = collections.OrderedDict([
-    ('Monthly', '@zfs-auto-snap_monthly-'),
-    ('Weekly', '@zfs-auto-snap_weekly-'),
-    ('Daily', '@zfs-auto-snap_daily-'),
-    ('Hourly', '@zfs-auto-snap_hourly-'),
-    ('Frequent', '@zfs-auto-snap_frequent-'),
-    ('Mirror', '@zfs-mirror_'),
-    ('ZSys', '@autozsys_'),
-])
+labels = {
+    'Monthly': '@zfs-auto-snap_monthly-',
+    'Weekly': '@zfs-auto-snap_weekly-',
+    'Daily': '@zfs-auto-snap_daily-',
+    'Hourly': '@zfs-auto-snap_hourly-',
+    'Frequent': '@zfs-auto-snap_frequent-',
+    'Mirror': '@zfs-mirror_',
+    'ZSys': '@autozsys_',
+}
 
-results = collections.OrderedDict()
+results = {}
 for label in labels.keys():
-    results[label] = collections.OrderedDict([('Total', 0)])
-results['Other'] = collections.OrderedDict([('Total', 0)])
-results['Total'] = collections.OrderedDict([('Total', 0)])
+    results[label] = {'Total': 0}
+results['Other'] = {'Total': 0}
+results['Total'] = {'Total': 0}
 
 datasets = Command("zfs list -o name -H".split()).lines()
 
@@ -47,7 +46,7 @@ for dataset in datasets:
     cmd = Command(list_cmd)
     snapshots = cmd.lines()
     for snapshot in snapshots:
-        for label, pattern in labels.iteritems():
+        for label, pattern in labels.items():
             if re.search(pattern, snapshot):
                 cur_count = results[label].get(dataset, 0)
                 results[label][dataset] = cur_count + 1
@@ -69,7 +68,7 @@ sys.stdout.write('\n')
 
 for dataset in datasets:
     sys.stdout.write('{0: <{pad}}'.format(dataset, pad=col_width))
-    for label, counts in results.iteritems():
+    for label, counts in results.items():
         sys.stdout.write('{0: >10}'.format(counts.get(dataset, 0)))
     sys.stdout.write('\n')
 
